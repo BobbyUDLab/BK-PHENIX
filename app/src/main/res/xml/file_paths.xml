@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Экспорт сырых логов через FileProvider: только каталог logs внутри filesDir. -->
+<paths>
+    <files-path name="logs" path="logs/" />
+</paths>

@@ -16,7 +16,9 @@ import ru.bkphenix.core.model.SatelliteStatus
 data class SatellitesUiState(
     val satellites: List<SatelliteStatus> = emptyList(),
     val summary: List<ConstellationSummary> = emptyList(),
-    val dualFrequency: Boolean = false,
+    val dualFrequency: Boolean? = null,
+    val fromMeasurements: Boolean = false,
+    val statusCallbacks: Long = 0,
     val capabilities: GnssCapabilitiesSnapshot? = null,
     val measurements: MeasurementSummary? = null,
     val measurementsStatus: SourceStatus = SourceStatus.Idle,
@@ -38,7 +40,7 @@ class SatellitesViewModel(repository: PhenixRepository) : ViewModel() {
         SatellitesUiState(
             satellites = sats.sortedWith(compareBy({ it.constellation.ordinal }, { it.svid })),
             summary = SatelliteSummary.byConstellation(sats),
-            dualFrequency = SatelliteSummary.isDualFrequency(sats),
+            dualFrequency = SatelliteSummary.isDualFrequency(sats, meas?.bands),
             capabilities = caps,
             measurements = meas,
             measurementsStatus = measStatus,
@@ -47,5 +49,9 @@ class SatellitesViewModel(repository: PhenixRepository) : ViewModel() {
         )
     }.combine(repository.solution) { ui, solution ->
         ui.copy(raim = RaimPresentation.from(solution?.gnss))
+    }.combine(
+        combine(repository.satellitesFromMeasurements, repository.satelliteStatusCallbacks) { a, b -> a to b },
+    ) { ui, (fromMeasurements, callbacks) ->
+        ui.copy(fromMeasurements = fromMeasurements, statusCallbacks = callbacks)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SatellitesUiState())
 }

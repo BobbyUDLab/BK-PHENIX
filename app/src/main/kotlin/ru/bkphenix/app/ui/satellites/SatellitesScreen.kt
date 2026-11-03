@@ -35,7 +35,7 @@ fun SatellitesScreen(viewModel: SatellitesViewModel) {
                 val caps = state.capabilities
                 InfoRow("Модель", caps?.hardwareModel ?: "Не сообщается")
                 InfoRow("Год оборудования", caps?.yearOfHardware?.toString())
-                InfoRow("Двухчастотный приём (L5)", if (state.satellites.isEmpty()) null else state.dualFrequency.yesNo())
+                InfoRow("Двухчастотный приём (L5)", state.dualFrequency?.yesNo())
                 InfoRow("Сырые измерения", caps?.measurements.yesNo())
                 InfoRow("Навигационные сообщения", caps?.navigationMessages.yesNo())
                 InfoRow("Фаза несущей (ADR)", caps?.accumulatedDeltaRange.yesNo())
@@ -58,6 +58,12 @@ fun SatellitesScreen(viewModel: SatellitesViewModel) {
         item {
             SectionCard("Созвездия") {
                 if (state.summary.isEmpty()) EmptyHint("Спутники пока не видны")
+                if (state.fromMeasurements) {
+                    EmptyHint(
+                        "По сырым измерениям: чип не присылает статус спутников " +
+                            "(вызовов GnssStatus: ${state.statusCallbacks}), угол места неизвестен",
+                    )
+                }
                 state.summary.forEach { s ->
                     InfoRow(
                         s.constellation.displayName,
@@ -73,7 +79,7 @@ fun SatellitesScreen(viewModel: SatellitesViewModel) {
                 Text("${sat.constellation.displayName} ${sat.svid}", Modifier.weight(1.4f))
                 Text(GnssMapping.bandLabel(sat.band, sat.constellation), Modifier.weight(0.6f))
                 Text("${sat.cn0DbHz.fmt(0)} дБГц", Modifier.weight(1f))
-                Text("${sat.elevationDeg.fmt(0)}°", Modifier.weight(0.6f))
+                Text(if (sat.elevationDeg.isNaN()) "—" else "${sat.elevationDeg.fmt(0)}°", Modifier.weight(0.6f))
                 Text(if (sat.usedInFix) "✓" else "", Modifier.weight(0.3f))
             }
         }

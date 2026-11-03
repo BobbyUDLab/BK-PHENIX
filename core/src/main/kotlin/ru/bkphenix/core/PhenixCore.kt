@@ -57,8 +57,10 @@ public class PhenixCore(
         val words = navigationWords + navigationSubframes.flatMap { it.words }
         val comparison = comparator.compare(observations)
         val gnss = rawGnss?.let { gnssProcessor.process(it, observations, timeObservations) }
+        // При сырых данных время сверяет детектор NITZ с подробностями; общий движок его не дублирует.
+        val timeForEngine = if (gnss != null) emptyList() else timeObservations
         var integrity = integrityEngine.evaluate(
-            IntegrityContext(observations, comparison, words, timeObservations),
+            IntegrityContext(observations, comparison, words, timeForEngine),
         )
         if (gnss != null) integrity = IntegrityReport.merge(listOf(integrity, gnss.report))
         val anchor = anchorManager.evaluate(comparison.estimate, comparison.accuracyM, nowMillis)

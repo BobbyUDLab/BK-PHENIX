@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="app_name">BK-PHENIX</string>
+  <string name="screen_coordinate">Координата</string>
+  <string name="label_latitude">Широта</string>
+  <string name="label_longitude">Долгота</string>
+  <string name="label_accuracy">Погрешность</string>
+  <string name="label_integrity">Целостность</string>
+  <string name="label_anchor">Якорь</string>
+  <string name="label_sources">Источники</string>
+  <string name="value_unknown">—</string>
+  <string name="accuracy_meters">± %1$s м</string>
+  <string name="action_set_anchor">Задать якорь</string>
+  <string name="anchor_none">Не задан</string>
+  <string name="anchor_human">Задан пользователем</string>
+  <string name="anchor_conflict">Конфликт с решением</string>
+  <string name="stub_notice">Демонстрационные данные: сбор с датчиков появится на этапе 2.</string>
+</resources>

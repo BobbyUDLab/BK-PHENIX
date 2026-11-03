@@ -17,6 +17,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import java.util.concurrent.Executor
+import ru.bkphenix.app.data.log.GnssLoggerFormat
+import ru.bkphenix.app.data.log.RawLogRecorder
+import ru.bkphenix.app.data.log.RawLogRow
+import ru.bkphenix.app.data.log.StatusLogRow
 import ru.bkphenix.app.data.mapping.GnssMapping
 import ru.bkphenix.app.data.mapping.NavigationMessageMapping
 import ru.bkphenix.app.data.model.GnssCapabilitiesSnapshot
@@ -41,6 +45,10 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
     private val callbackThread = HandlerThread("bkphenix-gnss").apply { start() }
     private val handler = Handler(callbackThread.looper)
     private val executor = Executor { handler.post(it) }
+
+    /** Куда писать лог GnssLogger; null — запись выключена. */
+    @Volatile
+    var logSink: RawLogRecorder? = null
 
     private val _statusCallbacks = MutableStateFlow(0L)
 
@@ -100,6 +108,7 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
             override fun onSatelliteStatusChanged(status: GnssStatus) {
                 setStatus(SourceStatus.Active)
                 _statusCallbacks.value += 1
+                logSink?.takeIf { it.isRecording }?.let { status.log(it) }
                 trySend(status.toSatellites())
             }
         }
@@ -124,6 +133,7 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
         val callback = object : GnssMeasurementsEvent.Callback() {
             override fun onGnssMeasurementsReceived(event: GnssMeasurementsEvent) {
                 _measurementsStatus.value = SourceStatus.Active
+                logSink?.takeIf { it.isRecording }?.let { event.log(it) }
                 trySend(event.toBatch())
             }
 
@@ -160,6 +170,9 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
         val callback = object : GnssNavigationMessage.Callback() {
             override fun onGnssNavigationMessageReceived(event: GnssNavigationMessage) {
                 _navigationStatus.value = SourceStatus.Active
+                logSink?.takeIf { it.isRecording }?.text(
+                    GnssLoggerFormat.nav(event.svid, event.type, event.status, event.messageId, event.submessageId, event.data),
+                )
                 NavigationMessageMapping.gpsL1caSubframe(event.svid, event.type, event.data)?.let { trySend(it) }
             }
 
@@ -189,6 +202,74 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
     /** Пока сообщений не было: если чип заявляет, что не умеет их выдавать, говорим об этом прямо. */
     private fun noNavigationYet(): SourceStatus =
         if (capabilities().navigationMessages == false) SourceStatus.Unsupported(NO_NAV_REASON) else SourceStatus.Waiting
+
+    private fun GnssStatus.log(sink: RawLogRecorder) {
+        val now = System.currentTimeMillis()
+        for (i in 0 until satelliteCount) {
+            sink.text(
+                GnssLoggerFormat.status(
+                    StatusLogRow(
+                        unixTimeMillis = now,
+                        signalCount = satelliteCount,
+                        signalIndex = i,
+                        constellationType = getConstellationType(i),
+                        svid = getSvid(i),
+                        carrierFrequencyHz = if (hasCarrierFrequencyHz(i)) getCarrierFrequencyHz(i).toDouble() else null,
+                        cn0DbHz = getCn0DbHz(i).toDouble(),
+                        azimuthDegrees = getAzimuthDegrees(i).toDouble(),
+                        elevationDegrees = getElevationDegrees(i).toDouble(),
+                        usedInFix = usedInFix(i),
+                        hasAlmanac = hasAlmanacData(i),
+                        hasEphemeris = hasEphemerisData(i),
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Suppress("DEPRECATION") // AGC на уровне измерения: на API 33+ дублируется GnssAutomaticGainControl.
+    private fun GnssMeasurementsEvent.log(sink: RawLogRecorder) {
+        val c = clock
+        val now = System.currentTimeMillis()
+        measurements.forEach { m ->
+            sink.text(
+                GnssLoggerFormat.raw(
+                    RawLogRow(
+                        utcTimeMillis = now,
+                        timeNanos = c.timeNanos,
+                        leapSecond = if (c.hasLeapSecond()) c.leapSecond else null,
+                        timeUncertaintyNanos = if (c.hasTimeUncertaintyNanos()) c.timeUncertaintyNanos else null,
+                        fullBiasNanos = if (c.hasFullBiasNanos()) c.fullBiasNanos else null,
+                        biasNanos = if (c.hasBiasNanos()) c.biasNanos else null,
+                        biasUncertaintyNanos = if (c.hasBiasUncertaintyNanos()) c.biasUncertaintyNanos else null,
+                        driftNanosPerSecond = if (c.hasDriftNanosPerSecond()) c.driftNanosPerSecond else null,
+                        driftUncertaintyNanosPerSecond = if (c.hasDriftUncertaintyNanosPerSecond()) {
+                            c.driftUncertaintyNanosPerSecond
+                        } else {
+                            null
+                        },
+                        hardwareClockDiscontinuityCount = c.hardwareClockDiscontinuityCount,
+                        svid = m.svid,
+                        timeOffsetNanos = m.timeOffsetNanos,
+                        state = m.state,
+                        receivedSvTimeNanos = m.receivedSvTimeNanos,
+                        receivedSvTimeUncertaintyNanos = m.receivedSvTimeUncertaintyNanos,
+                        cn0DbHz = m.cn0DbHz,
+                        pseudorangeRateMps = m.pseudorangeRateMetersPerSecond,
+                        pseudorangeRateUncertaintyMps = m.pseudorangeRateUncertaintyMetersPerSecond,
+                        accumulatedDeltaRangeState = m.accumulatedDeltaRangeState,
+                        accumulatedDeltaRangeMeters = m.accumulatedDeltaRangeMeters,
+                        accumulatedDeltaRangeUncertaintyMeters = m.accumulatedDeltaRangeUncertaintyMeters,
+                        carrierFrequencyHz = if (m.hasCarrierFrequencyHz()) m.carrierFrequencyHz.toDouble() else null,
+                        multipathIndicator = m.multipathIndicator,
+                        snrInDb = if (m.hasSnrInDb()) m.snrInDb else null,
+                        constellationType = m.constellationType,
+                        agcDb = if (m.hasAutomaticGainControlLevelDb()) m.automaticGainControlLevelDb else null,
+                    ),
+                ),
+            )
+        }
+    }
 
     private fun GnssStatus.toSatellites(): List<SatelliteStatus> = (0 until satelliteCount).map { i ->
         val constellation = GnssMapping.constellation(getConstellationType(i))

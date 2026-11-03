@@ -43,7 +43,9 @@ object RaimPresentation {
             },
             protectionLevel = raim?.horizontalProtectionLevelM?.let { "${fmt(it, 1)} м" },
             statistic = raim?.testStatistic?.let { t -> "${fmt(t, 1)} из ${raim.threshold?.let { fmt(it, 1) } ?: "—"}" },
-            ephemerides = "${r.ephemerisCount} сп. GPS · псевдодальностей ${r.pseudorangeCount}",
+            ephemerides = "${r.ephemerisCount} сп. GPS" +
+                (if (r.externalEphemerisCount > 0) " (RINEX: ${r.externalEphemerisCount})" else "") +
+                " · псевдодальностей ${r.pseudorangeCount}",
             detectors = r.detectors.map {
                 DetectorRow(
                     name = it.kind.displayName,

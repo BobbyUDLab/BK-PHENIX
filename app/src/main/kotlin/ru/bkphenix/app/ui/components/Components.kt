@@ -49,6 +49,7 @@ fun EmptyHint(text: String) {
 fun SourceStatus.label(): String = when (this) {
     SourceStatus.Idle -> "Не запущен"
     SourceStatus.Active -> "Работает"
+    SourceStatus.Waiting -> "Нет данных"
     SourceStatus.PermissionDenied -> "Нет разрешения"
     is SourceStatus.Unsupported -> "Не поддерживается: $reason"
     is SourceStatus.Unavailable -> "Недоступен: $reason"

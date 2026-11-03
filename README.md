@@ -37,3 +37,20 @@ CI собирает debug APK на каждый PR и пуш в `main`; APK ле
 
 - Ветки `feature/*`, `fix/*`; изменения в `main` только через PR с зелёным CI.
 - Коммиты в стиле [Conventional Commits](https://www.conventionalcommits.org/ru/) на русском: `feat(core): …`, `fix(app): …`, `docs: …`.
+
+## Этап 2: сбор данных (без GMS)
+
+Приложение использует только AOSP API — работает на Huawei/Honor без Google-сервисов:
+
+| Источник | API | Куда идёт |
+|---|---|---|
+| GNSS / сеть | `LocationManager` (gps, network, passive) | наблюдения ядра |
+| Спутники | `GnssStatus`, `GnssMeasurementsEvent`, `GnssCapabilities` | экран «Спутники» |
+| Навсообщения | `GnssNavigationMessage` (GPS LNAV) | проверка чётности IS-GPS-200 |
+| Соты | `TelephonyManager.getAllCellInfo` | `CellLocator` (офлайн-база — этап 4) |
+| Wi-Fi / RTT, BLE | `WifiManager`, `WifiRttManager`, `BluetoothLeScanner` | диагностика (базы — этапы 4–5) |
+| Датчики | `SensorManager` | диагностика |
+| Время сети | `SystemClock.currentNetworkTimeClock` (API 33+) | сверка времени с GNSS |
+
+Сбор идёт в foreground-сервисе (`location`). Урезанные прошивкой API деградируют до статуса
+«не поддерживается», а не до падения. Экраны: «Координата», «Спутники», «Диагностика».

@@ -32,6 +32,7 @@ import ru.bkphenix.app.data.source.LocationDataSource
 import ru.bkphenix.app.data.source.NetworkTimeDataSource
 import ru.bkphenix.app.data.source.SensorDataSource
 import ru.bkphenix.app.data.source.WifiDataSource
+import ru.bkphenix.app.ui.satellites.SatelliteSummary
 import ru.bkphenix.core.PhenixCore
 import ru.bkphenix.core.PhenixSolution
 import ru.bkphenix.core.anchor.Anchor
@@ -86,6 +87,12 @@ class PhenixRepository(
     val solution: StateFlow<PhenixSolution?> = _solution.asStateFlow()
     private val _satellites = MutableStateFlow<List<SatelliteStatus>>(emptyList())
     val satellites: StateFlow<List<SatelliteStatus>> = _satellites.asStateFlow()
+    private val _satellitesFromMeasurements = MutableStateFlow(false)
+
+    /** true — список спутников построен по сырым измерениям, потому что GnssStatus не приходит. */
+    val satellitesFromMeasurements: StateFlow<Boolean> = _satellitesFromMeasurements.asStateFlow()
+    val satelliteStatusCallbacks: StateFlow<Long> get() = gnss.statusCallbacks
+    private var lastStatusAtMillis = 0L
     private val _measurements = MutableStateFlow<MeasurementSummary?>(null)
     val measurements: StateFlow<MeasurementSummary?> = _measurements.asStateFlow()
     private val _navigation = MutableStateFlow(NavigationStats())
@@ -128,10 +135,18 @@ class PhenixRepository(
                 LocationMapping.toObservation(raw)?.let(aggregator::put)
                 if (raw.provider == "gps") gnssTimeOffsetMs = raw.timeMillis - clock()
             }
-            collectSafely(gnss.satellites()) { _satellites.value = it }
+            collectSafely(gnss.satellites()) {
+                lastStatusAtMillis = clock()
+                _satellitesFromMeasurements.value = false
+                _satellites.value = it
+            }
             collectSafely(gnss.measurements()) { batch ->
                 _measurements.value = batch.summary
                 pendingRaw = batch.epoch
+                if (clock() - lastStatusAtMillis > STATUS_STALE_MILLIS) {
+                    _satellitesFromMeasurements.value = true
+                    _satellites.value = SatelliteSummary.fromMeasurements(batch.epoch)
+                }
                 val leap = batch.leapSeconds ?: Pseudoranges.DEFAULT_LEAP_SECONDS
                 rawTimeOffsetMs = Pseudoranges.utcMillis(batch.epoch.clock, leap)?.let { it - batch.receivedAtMillis }
             }
@@ -207,6 +222,7 @@ class PhenixRepository(
     private companion object {
         const val TAG = "BkPhenix"
         const val EPOCH_MILLIS = 1_000L
+        const val STATUS_STALE_MILLIS = 5_000L
         const val GNSS_TIME_UNCERTAINTY_MS = 1_000L
         const val NETWORK_TIME_UNCERTAINTY_MS = 1_000L
     }

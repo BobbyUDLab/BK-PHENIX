@@ -9,14 +9,14 @@ import android.location.GnssStatus
 import android.location.LocationManager
 import android.os.Build
 import android.os.Handler
-import android.os.Looper
-import androidx.core.content.ContextCompat
+import android.os.HandlerThread
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
+import java.util.concurrent.Executor
 import ru.bkphenix.app.data.mapping.GnssMapping
 import ru.bkphenix.app.data.mapping.NavigationMessageMapping
 import ru.bkphenix.app.data.model.GnssCapabilitiesSnapshot
@@ -37,8 +37,15 @@ import ru.bkphenix.core.model.SatelliteStatus
 @SuppressLint("MissingPermission")
 class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
     private val manager = context.getSystemService(LocationManager::class.java)
-    private val handler = Handler(Looper.getMainLooper())
-    private val executor = ContextCompat.getMainExecutor(context)
+    // Отдельный поток для колбэков: не зависим от загрузки главного потока и его Looper.
+    private val callbackThread = HandlerThread("bkphenix-gnss").apply { start() }
+    private val handler = Handler(callbackThread.looper)
+    private val executor = Executor { handler.post(it) }
+
+    private val _statusCallbacks = MutableStateFlow(0L)
+
+    /** Сколько раз чип прислал GnssStatus: 0 при работающих измерениях — признак урезанного HAL. */
+    val statusCallbacks: StateFlow<Long> = _statusCallbacks.asStateFlow()
 
     private val _measurementsStatus = MutableStateFlow<SourceStatus>(SourceStatus.Idle)
     val measurementsStatus: StateFlow<SourceStatus> = _measurementsStatus.asStateFlow()
@@ -92,6 +99,7 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
         val callback = object : GnssStatus.Callback() {
             override fun onSatelliteStatusChanged(status: GnssStatus) {
                 setStatus(SourceStatus.Active)
+                _statusCallbacks.value += 1
                 trySend(status.toSatellites())
             }
         }

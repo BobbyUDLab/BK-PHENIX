@@ -4,7 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import ru.bkphenix.app.ui.coordinate.CoordinateScreen
+import ru.bkphenix.app.ui.PhenixApp
 import ru.bkphenix.app.ui.theme.BkPhenixTheme
 
 class MainActivity : ComponentActivity() {
@@ -13,7 +13,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             BkPhenixTheme {
-                CoordinateScreen()
+                PhenixApp()
             }
         }
     }

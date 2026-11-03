@@ -35,6 +35,8 @@ import ru.bkphenix.app.data.source.CellDataSource
 import ru.bkphenix.app.data.source.GnssDataSource
 import ru.bkphenix.app.data.source.LocationDataSource
 import ru.bkphenix.app.data.source.NetworkTimeDataSource
+import ru.bkphenix.app.data.source.RinexEphemerisInfo
+import ru.bkphenix.app.data.source.RinexEphemerisSource
 import ru.bkphenix.app.data.source.SensorDataSource
 import ru.bkphenix.app.data.source.WifiDataSource
 import ru.bkphenix.app.ui.satellites.SatelliteSummary
@@ -73,6 +75,7 @@ class PhenixRepository(
     private val sensors: SensorDataSource,
     private val networkTimeSource: NetworkTimeDataSource,
     private val logRecorder: RawLogRecorder,
+    private val rinex: RinexEphemerisSource,
     cellTowers: CellTowerDatabase = EmptyCellTowerDatabase,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
@@ -143,6 +146,7 @@ class PhenixRepository(
         "Bluetooth/BLE" to ble.status,
         "Датчики" to sensors.status,
         "Сетевое время" to networkTimeSource.status,
+        "Эфемериды RINEX" to rinex.status,
     )
 
     @Synchronized
@@ -193,6 +197,7 @@ class PhenixRepository(
                 networkTimeSample = it
                 _networkTime.value = it
             }
+            launch { refreshEphemerides() }
             while (true) {
                 solveEpoch()
                 delay(EPOCH_MILLIS)
@@ -219,6 +224,22 @@ class PhenixRepository(
         scope.launch {
             core.anchorManager.clear()
             solveEpoch()
+        }
+    }
+
+    /** Сведения о запасных эфемеридах RINEX. */
+    val rinexInfo: StateFlow<RinexEphemerisInfo?> get() = rinex.info
+
+    /**
+     * Запасные эфемериды: сразу из кэша, затем из сети каждые [RINEX_REFRESH_MILLIS]
+     * (при неудаче — повтор через [RINEX_RETRY_MILLIS]). Загрузка в хранилище идёт в потоке ядра.
+     */
+    private suspend fun refreshEphemerides() {
+        rinex.loadCached(clock()).takeIf { it.isNotEmpty() }?.let { core.gnssProcessor.ephemerides.replaceExternal(it) }
+        while (true) {
+            val fresh = rinex.download(clock())
+            if (fresh.isNotEmpty()) core.gnssProcessor.ephemerides.replaceExternal(fresh)
+            delay(if (fresh.isNotEmpty()) RINEX_REFRESH_MILLIS else RINEX_RETRY_MILLIS)
         }
     }
 
@@ -266,6 +287,8 @@ class PhenixRepository(
         const val TAG = "BkPhenix"
         const val EPOCH_MILLIS = 1_000L
         const val STATUS_STALE_MILLIS = 5_000L
+        const val RINEX_REFRESH_MILLIS = 2 * 3600_000L
+        const val RINEX_RETRY_MILLIS = 10 * 60_000L
         const val GNSS_TIME_UNCERTAINTY_MS = 1_000L
     }
 }

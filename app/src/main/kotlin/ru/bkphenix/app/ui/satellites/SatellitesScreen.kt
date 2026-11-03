@@ -11,6 +11,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -53,6 +54,7 @@ fun SatellitesScreen(viewModel: SatellitesViewModel) {
                 InfoRow("Ошибок чётности", state.navigation.parityFailures.toString())
             }
         }
+        item { RaimCard(state.raim) }
         item {
             SectionCard("Созвездия") {
                 if (state.summary.isEmpty()) EmptyHint("Спутники пока не видны")
@@ -74,6 +76,40 @@ fun SatellitesScreen(viewModel: SatellitesViewModel) {
                 Text("${sat.elevationDeg.fmt(0)}°", Modifier.weight(0.6f))
                 Text(if (sat.usedInFix) "✓" else "", Modifier.weight(0.3f))
             }
+        }
+    }
+}
+
+@Composable
+private fun Severity.color(): Color = when (this) {
+    Severity.NEUTRAL -> Color.Unspecified
+    Severity.GOOD -> MaterialTheme.colorScheme.primary
+    Severity.WARNING -> MaterialTheme.colorScheme.tertiary
+    Severity.ALERT -> MaterialTheme.colorScheme.error
+}
+
+@Composable
+private fun RaimCard(raim: RaimUi?) {
+    SectionCard("Контроль целостности (RAIM)") {
+        if (raim == null) {
+            EmptyHint("Нет сырых измерений: RAIM и детекторы подмены работают только на чипах, отдающих GnssMeasurement")
+            return@SectionCard
+        }
+        InfoRow("Статус", raim.status, raim.severity.color())
+        InfoRow("Эфемериды", raim.ephemerides)
+        InfoRow("Собственное решение", raim.ownSolution ?: "Нет")
+        InfoRow("Статистика χ² / порог", raim.statistic)
+        InfoRow("Уровень защиты (HPL)", raim.protectionLevel)
+        if (raim.excluded.isEmpty()) {
+            InfoRow("Исключённые спутники", "Нет")
+        } else {
+            Text("Исключённые спутники", style = MaterialTheme.typography.bodyMedium)
+            raim.excluded.forEach { InfoRow(it.label, it.residual, MaterialTheme.colorScheme.error) }
+        }
+        Text("Детекторы подмены", style = MaterialTheme.typography.titleSmall)
+        raim.detectors.forEach { d ->
+            InfoRow(d.name, d.verdict, d.severity.color())
+            EmptyHint(d.detail)
         }
     }
 }

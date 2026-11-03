@@ -22,6 +22,7 @@ data class SatellitesUiState(
     val measurementsStatus: SourceStatus = SourceStatus.Idle,
     val navigation: NavigationStats = NavigationStats(),
     val navigationStatus: SourceStatus = SourceStatus.Idle,
+    val raim: RaimUi? = null,
 )
 
 class SatellitesViewModel(repository: PhenixRepository) : ViewModel() {
@@ -44,5 +45,7 @@ class SatellitesViewModel(repository: PhenixRepository) : ViewModel() {
             navigation = nav,
             navigationStatus = navStatus,
         )
+    }.combine(repository.solution) { ui, solution ->
+        ui.copy(raim = RaimPresentation.from(solution?.gnss))
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SatellitesUiState())
 }

@@ -3,6 +3,7 @@ package ru.bkphenix.app.ui.diagnostics
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,6 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import ru.bkphenix.app.BuildConfig
 import ru.bkphenix.app.data.model.SensorKind
 import ru.bkphenix.app.data.source.SensorDataSource
 import ru.bkphenix.app.ui.components.EmptyHint
@@ -41,6 +43,13 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item {
+            SectionCard("О приложении") {
+                InfoRow("Версия", "${BuildConfig.VERSION_NAME} (сборка ${BuildConfig.VERSION_CODE}, ${BuildConfig.BUILD_TYPE})")
+                InfoRow("Android", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+                InfoRow("Устройство", "${Build.MANUFACTURER} ${Build.MODEL}")
+            }
+        }
         item {
             SectionCard("Запись сырого лога") {
                 InfoRow("Состояние", if (log.recording) "Идёт запись" else "Остановлена")

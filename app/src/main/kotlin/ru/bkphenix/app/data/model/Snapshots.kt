@@ -99,3 +99,6 @@ data class SensorSnapshot(
     val values: List<Float>,
     val timeMillis: Long,
 )
+
+/** Смещение сетевого времени относительно системных часов и способ его получения. */
+data class NetworkTimeSample(val offsetMillis: Long, val uncertaintyMillis: Long, val method: String)

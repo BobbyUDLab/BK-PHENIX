@@ -95,7 +95,9 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
         }
         item {
             SectionCard("Время") {
-                InfoRow("Сетевое время − системное", state.networkTimeOffsetMillis?.let { "$it мс" } ?: "Недоступно")
+                val t = state.networkTime
+                InfoRow("Сетевое время − системное", t?.let { "${it.offsetMillis} ± ${it.uncertaintyMillis} мс" } ?: "Недоступно")
+                t?.let { InfoRow("Способ", it.method) }
             }
         }
     }

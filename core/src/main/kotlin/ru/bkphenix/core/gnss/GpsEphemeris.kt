@@ -72,6 +72,13 @@ public data class GpsEphemeris(
     }
 
     /** Эфемериды пригодны в окне ±[FIT_INTERVAL_S] от toe. */
+    /** Возраст эфемерид в момент (неделя GPS, секунды недели) с учётом номера недели, секунды. */
+    public fun ageSeconds(gpsWeek: Int, tow: Double): Double {
+        var weeks = (gpsWeek - weekMod1024).mod(WEEK_ROLLOVER)
+        if (weeks > WEEK_ROLLOVER / 2) weeks -= WEEK_ROLLOVER
+        return weeks * 2 * HALF_WEEK + tow - toe
+    }
+
     public fun isValidAt(tow: Double): Boolean = abs(wrapWeek(tow - toe)) <= FIT_INTERVAL_S
 
     private fun eccentricAnomaly(m: Double): Double {
@@ -96,6 +103,7 @@ public data class GpsEphemeris(
 
         private const val F_REL = -4.442807633e-10
         private const val HALF_WEEK = 302_400.0
+        private const val WEEK_ROLLOVER = 1024
         private const val KEPLER_ITERATIONS = 20
 
         /** Стандартный интервал аппроксимации 4 ч → ±2 ч. */

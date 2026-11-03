@@ -2,6 +2,7 @@ package ru.bkphenix.core.gnss
 
 import ru.bkphenix.core.integrity.GpsParity
 import ru.bkphenix.core.integrity.NavigationWord
+import kotlin.math.abs
 
 /** Подкадр GPS LNAV одного спутника: 10 слов по 30 бит. */
 public data class NavigationSubframe(val svid: Int, val words: List<NavigationWord>)
@@ -130,6 +131,7 @@ public class EphemerisStore {
     private val sf2 = HashMap<Int, LnavDecoder.Subframe2>()
     private val sf3 = HashMap<Int, LnavDecoder.Subframe3>()
     private val ephemerides = HashMap<Int, GpsEphemeris>()
+    private val external = HashMap<Int, List<GpsEphemeris>>()
 
     /** Добавляет подкадр; возвращает `true`, если в результате обновились эфемериды спутника. */
     public fun add(subframe: NavigationSubframe): Boolean {
@@ -153,9 +155,38 @@ public class EphemerisStore {
         ephemerides[ephemeris.svid] = ephemeris
     }
 
+    /** Эфемериды из собственных навигационных сообщений чипа. */
     public operator fun get(svid: Int): GpsEphemeris? = ephemerides[svid]
 
     public val size: Int get() = ephemerides.size
 
     public val svids: Set<Int> get() = ephemerides.keys.toSet()
+
+    /**
+     * Заменяет внешний набор (например, broadcast-эфемериды RINEX, скачанные из сети).
+     * На спутник хранится несколько наборов: нужный выбирается по времени в [select].
+     */
+    public fun replaceExternal(list: List<GpsEphemeris>) {
+        external.clear()
+        list.groupBy { it.svid }.forEach { (sv, items) -> external[sv] = items.distinctBy { it.weekMod1024 to it.toe } }
+    }
+
+    /** Число спутников, для которых есть внешние эфемериды. */
+    public val externalSize: Int get() = external.size
+
+    /** Спутники, для которых есть хоть какие-то эфемериды. */
+    public val availableSvids: Set<Int> get() = ephemerides.keys + external.keys
+
+    /**
+     * Эфемериды для момента (неделя GPS, секунды недели): собственные из навигационных
+     * сообщений, если они действуют, иначе ближайший по toe внешний набор в окне аппроксимации.
+     */
+    public fun select(svid: Int, gpsWeek: Int, tow: Double): GpsEphemeris? {
+        ephemerides[svid]?.takeIf { it.isValidAt(tow) }?.let { return it }
+        return external[svid].orEmpty()
+            .map { it to abs(it.ageSeconds(gpsWeek, tow)) }
+            .filter { (_, age) -> age <= GpsEphemeris.FIT_INTERVAL_S }
+            .minByOrNull { (_, age) -> age }
+            ?.first
+    }
 }

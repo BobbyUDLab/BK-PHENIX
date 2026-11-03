@@ -67,9 +67,23 @@ public object Pseudoranges {
     private const val NANOS_PER_SECOND = 1e9
     private const val MAX_RANGE_M = 1.0e8
     private const val MIN_RANGE_M = 1.5e7
+    private val SAME_WEEK_TIME_SCALES = setOf(GnssConstellation.GPS, GnssConstellation.QZSS, GnssConstellation.GALILEO)
+
+    /** Начало шкалы GPS (06.01.1980) в мс Unix. */
+    public const val GPS_EPOCH_UNIX_MILLIS: Long = 315_964_800_000L
+
+    /** Текущая разница GPS − UTC, секунды (с 2017 г.). */
+    public const val DEFAULT_LEAP_SECONDS: Int = 18
+
+    /** Время UTC по часам приёмника, мс; `null`, если время GPS ещё не оценено. */
+    public fun utcMillis(clock: RawGnssClock, leapSeconds: Int = DEFAULT_LEAP_SECONDS): Long? {
+        val fullBias = clock.fullBiasNanos ?: return null
+        val gpsNanos = clock.timeNanos - fullBias - clock.biasNanos.toLong()
+        return GPS_EPOCH_UNIX_MILLIS + gpsNanos / 1_000_000 - leapSeconds * 1000L
+    }
 
     /**
-     * Псевдодальности GPS (и QZSS, общая шкала времени): ρ = c · (t_rx − t_tx).
+     * Псевдодальности GPS, QZSS и Galileo (время недели совпадает с GPS с точностью до нс): ρ = c · (t_rx − t_tx).
      * Измерения без известного TOW и вне правдоподобного диапазона отбрасываются.
      */
     public fun compute(epoch: RawGnssEpoch): List<Pseudorange> {
@@ -80,7 +94,7 @@ public object Pseudoranges {
         val towNanosLong = gpsNanos - week * NANOS_PER_WEEK
         return epoch.measurements.mapNotNull { m ->
             if (!m.towKnown) return@mapNotNull null
-            if (m.sat.constellation != GnssConstellation.GPS && m.sat.constellation != GnssConstellation.QZSS) {
+            if (m.sat.constellation !in SAME_WEEK_TIME_SCALES) {
                 return@mapNotNull null
             }
             val rxNanos = towNanosLong.toDouble() + m.timeOffsetNanos - epoch.clock.biasNanos

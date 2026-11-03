@@ -37,7 +37,9 @@ import ru.bkphenix.core.PhenixSolution
 import ru.bkphenix.core.anchor.Anchor
 import ru.bkphenix.core.anchor.AnchorMode
 import ru.bkphenix.core.geo.GeoPoint
-import ru.bkphenix.core.integrity.NavigationWord
+import ru.bkphenix.core.gnss.NavigationSubframe
+import ru.bkphenix.core.gnss.Pseudoranges
+import ru.bkphenix.core.gnss.RawGnssEpoch
 import ru.bkphenix.core.model.SatelliteStatus
 import ru.bkphenix.core.model.TimeObservation
 import ru.bkphenix.core.model.TimeSource
@@ -73,7 +75,9 @@ class PhenixRepository(
     private val core = PhenixCore()
     private val cellLocator = CellLocator(cellTowers)
     private val aggregator = ObservationAggregator()
-    private val pendingWords = ArrayList<NavigationWord>()
+    private val pendingSubframes = ArrayList<NavigationSubframe>()
+    private var pendingRaw: RawGnssEpoch? = null
+    private var rawTimeOffsetMs: Long? = null
     private var gnssTimeOffsetMs: Long? = null
     private var networkTimeOffsetMs: Long? = null
     private var job: Job? = null
@@ -125,11 +129,16 @@ class PhenixRepository(
                 if (raw.provider == "gps") gnssTimeOffsetMs = raw.timeMillis - clock()
             }
             collectSafely(gnss.satellites()) { _satellites.value = it }
-            collectSafely(gnss.measurements()) { _measurements.value = it }
-            collectSafely(gnss.navigationWords()) { words ->
-                pendingWords += words
-                val failures = NavigationMessageMapping.parityFailureCount(words)
-                _navigation.update { NavigationStats(it.words + words.size, it.parityFailures + failures) }
+            collectSafely(gnss.measurements()) { batch ->
+                _measurements.value = batch.summary
+                pendingRaw = batch.epoch
+                val leap = batch.leapSeconds ?: Pseudoranges.DEFAULT_LEAP_SECONDS
+                rawTimeOffsetMs = Pseudoranges.utcMillis(batch.epoch.clock, leap)?.let { it - batch.receivedAtMillis }
+            }
+            collectSafely(gnss.navigationSubframes()) { subframe ->
+                pendingSubframes += subframe
+                val failures = NavigationMessageMapping.parityFailureCount(subframe.words)
+                _navigation.update { NavigationStats(it.words + subframe.words.size, it.parityFailures + failures) }
             }
             collectSafely(cells.cells()) { list ->
                 _cells.value = list
@@ -174,11 +183,19 @@ class PhenixRepository(
     private fun solveEpoch() {
         val now = clock()
         val time = buildList {
-            gnssTimeOffsetMs?.let { add(TimeObservation(TimeSource.GNSS, now + it, GNSS_TIME_UNCERTAINTY_MS)) }
+            // Время по часам приёмника точнее времени Location; если сырых данных нет — берём Location.
+            (rawTimeOffsetMs ?: gnssTimeOffsetMs)?.let { add(TimeObservation(TimeSource.GNSS, now + it, GNSS_TIME_UNCERTAINTY_MS)) }
             networkTimeOffsetMs?.let { add(TimeObservation(TimeSource.NITZ, now + it, NETWORK_TIME_UNCERTAINTY_MS)) }
         }
-        val words = pendingWords.toList().also { pendingWords.clear() }
-        _solution.value = core.solve(aggregator.fresh(now), now, words, time)
+        val subframes = pendingSubframes.toList().also { pendingSubframes.clear() }
+        val raw = pendingRaw.also { pendingRaw = null }
+        _solution.value = core.solve(
+            observations = aggregator.fresh(now),
+            nowMillis = now,
+            timeObservations = time,
+            rawGnss = raw,
+            navigationSubframes = subframes,
+        )
     }
 
     private fun <T> CoroutineScope.collectSafely(flow: Flow<T>, action: suspend (T) -> Unit) {

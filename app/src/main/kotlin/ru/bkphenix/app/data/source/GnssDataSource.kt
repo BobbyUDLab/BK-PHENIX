@@ -20,10 +20,13 @@ import kotlinx.coroutines.flow.callbackFlow
 import ru.bkphenix.app.data.mapping.GnssMapping
 import ru.bkphenix.app.data.mapping.NavigationMessageMapping
 import ru.bkphenix.app.data.model.GnssCapabilitiesSnapshot
+import ru.bkphenix.app.data.mapping.RawMeasurementMapping
+import ru.bkphenix.app.data.model.GnssMeasurementBatch
 import ru.bkphenix.app.data.model.MeasurementSummary
 import ru.bkphenix.app.data.model.SourceStatus
 import ru.bkphenix.app.permissions.Permissions
-import ru.bkphenix.core.integrity.NavigationWord
+import ru.bkphenix.core.gnss.NavigationSubframe
+import ru.bkphenix.core.gnss.RawGnssEpoch
 import ru.bkphenix.core.model.SatelliteStatus
 
 /**
@@ -102,7 +105,7 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
         awaitClose { guarded("unregisterGnssStatusCallback") { m.unregisterGnssStatusCallback(callback) } }
     }
 
-    fun measurements(): Flow<MeasurementSummary> = callbackFlow {
+    fun measurements(): Flow<GnssMeasurementBatch> = callbackFlow {
         val m = manager
         if (m == null || !Permissions.hasFineLocation(context)) {
             _measurementsStatus.value = SourceStatus.PermissionDenied
@@ -111,7 +114,7 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
         }
         val callback = object : GnssMeasurementsEvent.Callback() {
             override fun onGnssMeasurementsReceived(event: GnssMeasurementsEvent) {
-                trySend(event.toSummary())
+                trySend(event.toBatch())
             }
 
             @Suppress("OVERRIDE_DEPRECATION", "DEPRECATION") // единственный способ узнать статус до API 33
@@ -135,8 +138,8 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
         awaitClose { guarded("unregisterGnssMeasurementsCallback") { m.unregisterGnssMeasurementsCallback(callback) } }
     }
 
-    /** Слова GPS LNAV из каждого навигационного сообщения; прочие типы считаются, но не разбираются. */
-    fun navigationWords(): Flow<List<NavigationWord>> = callbackFlow {
+    /** Подкадры GPS LNAV из навигационных сообщений; прочие типы пока не разбираются. */
+    fun navigationSubframes(): Flow<NavigationSubframe> = callbackFlow {
         val m = manager
         if (m == null || !Permissions.hasFineLocation(context)) {
             _navigationStatus.value = SourceStatus.PermissionDenied
@@ -145,8 +148,7 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
         }
         val callback = object : GnssNavigationMessage.Callback() {
             override fun onGnssNavigationMessageReceived(event: GnssNavigationMessage) {
-                val words = NavigationMessageMapping.gpsL1caWords(event.type, event.data)
-                if (words.isNotEmpty()) trySend(words)
+                NavigationMessageMapping.gpsL1caSubframe(event.svid, event.type, event.data)?.let { trySend(it) }
             }
 
             @Suppress("OVERRIDE_DEPRECATION", "DEPRECATION") // единственный способ узнать статус до API 33
@@ -182,6 +184,43 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
             elevationDeg = getElevationDegrees(i).toDouble(),
             azimuthDeg = getAzimuthDegrees(i).toDouble(),
             usedInFix = usedInFix(i),
+        )
+    }
+
+    @Suppress("DEPRECATION") // AGC на уровне измерения: на API 33+ дублируется GnssAutomaticGainControl.
+    private fun GnssMeasurementsEvent.toBatch(): GnssMeasurementBatch {
+        val c = clock
+        val raw = measurements.map { m ->
+            RawMeasurementMapping.measurement(
+                constellationType = m.constellationType,
+                svid = m.svid,
+                carrierFrequencyHz = if (m.hasCarrierFrequencyHz()) m.carrierFrequencyHz.toDouble() else null,
+                cn0DbHz = m.cn0DbHz,
+                receivedSvTimeNanos = m.receivedSvTimeNanos,
+                receivedSvTimeUncertaintyNanos = m.receivedSvTimeUncertaintyNanos,
+                timeOffsetNanos = m.timeOffsetNanos,
+                state = m.state,
+                pseudorangeRateMps = m.pseudorangeRateMetersPerSecond,
+                agcDb = if (m.hasAutomaticGainControlLevelDb()) m.automaticGainControlLevelDb else null,
+            )
+        }
+        val rawClock = RawMeasurementMapping.clock(
+            timeNanos = c.timeNanos,
+            fullBiasNanos = if (c.hasFullBiasNanos()) c.fullBiasNanos else null,
+            biasNanos = if (c.hasBiasNanos()) c.biasNanos else null,
+            driftNanosPerSecond = if (c.hasDriftNanosPerSecond()) c.driftNanosPerSecond else null,
+            hardwareClockDiscontinuityCount = c.hardwareClockDiscontinuityCount,
+            elapsedRealtimeNanos = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && c.hasElapsedRealtimeNanos()) {
+                c.elapsedRealtimeNanos
+            } else {
+                null
+            },
+        )
+        return GnssMeasurementBatch(
+            summary = toSummary(),
+            epoch = RawGnssEpoch(rawClock, raw),
+            leapSeconds = if (c.hasLeapSecond()) c.leapSecond else null,
+            receivedAtMillis = System.currentTimeMillis(),
         )
     }
 

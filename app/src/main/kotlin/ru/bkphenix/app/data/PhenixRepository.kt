@@ -14,6 +14,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import ru.bkphenix.app.data.log.GnssLoggerFormat
+import ru.bkphenix.app.data.log.PhenixLogRecords
+import ru.bkphenix.app.data.log.RawLogRecorder
+import ru.bkphenix.app.data.log.RawLogState
 import ru.bkphenix.app.data.mapping.CellMapping
 import ru.bkphenix.app.data.mapping.LocationMapping
 import ru.bkphenix.app.data.mapping.NavigationMessageMapping
@@ -68,6 +72,7 @@ class PhenixRepository(
     private val ble: BleDataSource,
     private val sensors: SensorDataSource,
     private val networkTimeSource: NetworkTimeDataSource,
+    private val logRecorder: RawLogRecorder,
     cellTowers: CellTowerDatabase = EmptyCellTowerDatabase,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
@@ -113,6 +118,19 @@ class PhenixRepository(
     private val _running = MutableStateFlow(false)
     val running: StateFlow<Boolean> = _running.asStateFlow()
 
+    /** Запись сырого лога (GnssLogger txt + JSONL) для разбора на ПК. */
+    val logState: StateFlow<RawLogState> get() = logRecorder.state
+
+    init {
+        gnss.logSink = logRecorder
+    }
+
+    fun startLog() = logRecorder.start()
+
+    fun stopLog() = logRecorder.stop()
+
+    fun deleteLogs() = logRecorder.deleteFinished()
+
     /** Статусы источников по имени для диагностики. */
     val statusFlows: Map<String, StateFlow<SourceStatus>> = linkedMapOf(
         "Местоположение" to location.status,
@@ -135,6 +153,14 @@ class PhenixRepository(
             collectSafely(location.locations()) { raw ->
                 LocationMapping.toObservation(raw)?.let(aggregator::put)
                 if (raw.provider == "gps") gnssTimeOffsetMs = raw.timeMillis - clock()
+                if (logRecorder.isRecording) {
+                    logRecorder.text(
+                        GnssLoggerFormat.fix(
+                            raw.provider, raw.latitude, raw.longitude, raw.altitude, raw.accuracy68M,
+                            raw.timeMillis, raw.elapsedRealtimeNanos, raw.isMock,
+                        ),
+                    )
+                }
             }
             collectSafely(gnss.satellites()) {
                 lastStatusAtMillis = clock()
@@ -205,13 +231,29 @@ class PhenixRepository(
         }
         val subframes = pendingSubframes.toList().also { pendingSubframes.clear() }
         val raw = pendingRaw.also { pendingRaw = null }
-        _solution.value = core.solve(
+        val solution = core.solve(
             observations = aggregator.fresh(now),
             nowMillis = now,
             timeObservations = time,
             rawGnss = raw,
             navigationSubframes = subframes,
         )
+        _solution.value = solution
+        if (logRecorder.isRecording) {
+            logRecorder.json(
+                "epoch",
+                now,
+                PhenixLogRecords.epoch(
+                    solution = solution,
+                    measurements = _measurements.value,
+                    satellites = _satellites.value.size,
+                    satellitesFromMeasurements = _satellitesFromMeasurements.value,
+                    cells = _cells.value,
+                    sensors = _sensors.value.values,
+                    networkTime = networkTimeSample,
+                ),
+            )
+        }
     }
 
     private fun <T> CoroutineScope.collectSafely(flow: Flow<T>, action: suspend (T) -> Unit) {

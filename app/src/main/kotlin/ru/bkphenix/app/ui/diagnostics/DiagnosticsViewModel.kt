@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import ru.bkphenix.app.data.PhenixRepository
+import ru.bkphenix.app.data.log.RawLogState
 import ru.bkphenix.app.data.model.BleSnapshot
 import ru.bkphenix.app.data.model.CellSnapshot
 import ru.bkphenix.app.data.model.GnssCapabilitiesSnapshot
@@ -26,7 +27,13 @@ data class DiagnosticsUiState(
     val networkTime: NetworkTimeSample? = null,
 )
 
-class DiagnosticsViewModel(repository: PhenixRepository) : ViewModel() {
+class DiagnosticsViewModel(private val repository: PhenixRepository) : ViewModel() {
+    val logState: StateFlow<RawLogState> = repository.logState
+
+    fun toggleLog() = if (repository.logState.value.recording) repository.stopLog() else repository.startLog()
+
+    fun deleteLogs() = repository.deleteLogs()
+
     private val statusFlow = repository.statusFlows.let { flows ->
         combine(flows.values) { values -> flows.keys.zip(values).toMap() }
     }

@@ -19,7 +19,7 @@ Android-приложение для надёжного определения к
 
 ## Требования
 
-- JDK 17 (подойдёт `jbr` из Android Studio).
+- JDK 17 или новее, включая JDK 25 из `jbr` Android Studio (байткод собирается под Java 17).
 - Android SDK: `platforms;android-35`, `build-tools;35.0.0`. Путь берётся из `ANDROID_HOME` или `local.properties`.
 
 ## Сборка

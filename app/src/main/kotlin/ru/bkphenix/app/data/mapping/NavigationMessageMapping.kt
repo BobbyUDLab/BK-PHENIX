@@ -1,5 +1,6 @@
 package ru.bkphenix.app.data.mapping
 
+import ru.bkphenix.core.gnss.NavigationSubframe
 import ru.bkphenix.core.integrity.GpsParity
 import ru.bkphenix.core.integrity.NavigationWord
 
@@ -32,6 +33,10 @@ object NavigationMessageMapping {
             }
         }
     }
+
+    /** Подкадр для разбора эфемерид ядром или `null`, если сообщение не GPS LNAV. */
+    fun gpsL1caSubframe(svid: Int, type: Int, data: ByteArray?): NavigationSubframe? =
+        gpsL1caWords(type, data).takeIf { it.isNotEmpty() }?.let { NavigationSubframe(svid, it) }
 
     /** Обратная операция — упаковка слов (используется в тестах и для журналирования). */
     fun pack(words: List<Int>): ByteArray = ByteArray(words.size * BYTES_PER_WORD).also { out ->

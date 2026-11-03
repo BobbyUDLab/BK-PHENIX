@@ -38,6 +38,16 @@ data class MeasurementSummary(
     val timeMillis: Long,
 )
 
+/** Эпоха сырых измерений: сводка для экрана и данные для ядра. */
+data class GnssMeasurementBatch(
+    val summary: MeasurementSummary,
+    val epoch: ru.bkphenix.core.gnss.RawGnssEpoch,
+    /** Секунды координации GPS−UTC из GnssClock, если чип их сообщает. */
+    val leapSeconds: Int?,
+    /** Системное время получения эпохи, мс. */
+    val receivedAtMillis: Long,
+)
+
 /** Возможности ГНСС-чипа. `null` — неизвестно (API недоступно). */
 data class GnssCapabilitiesSnapshot(
     val hardwareModel: String?,

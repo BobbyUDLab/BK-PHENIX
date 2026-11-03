@@ -1,7 +1,10 @@
 package ru.bkphenix.app
 
 import android.content.Context
+import android.os.Build
 import ru.bkphenix.app.data.PhenixRepository
+import ru.bkphenix.app.data.log.GnssLoggerFormat
+import ru.bkphenix.app.data.log.RawLogRecorder
 import ru.bkphenix.app.data.source.BleDataSource
 import ru.bkphenix.app.data.source.CellDataSource
 import ru.bkphenix.app.data.source.GnssDataSource
@@ -9,6 +12,7 @@ import ru.bkphenix.app.data.source.LocationDataSource
 import ru.bkphenix.app.data.source.NetworkTimeDataSource
 import ru.bkphenix.app.data.source.SensorDataSource
 import ru.bkphenix.app.data.source.WifiDataSource
+import java.io.File
 
 /** Ручное внедрение зависимостей: один репозиторий на процесс. */
 class AppContainer(context: Context) {
@@ -22,7 +26,15 @@ class AppContainer(context: Context) {
             wifi = WifiDataSource(app),
             ble = BleDataSource(app),
             sensors = SensorDataSource(app),
-            networkTime = NetworkTimeDataSource(),
+            networkTimeSource = NetworkTimeDataSource(app),
+            logRecorder = RawLogRecorder(File(app.filesDir, "logs")) {
+                GnssLoggerFormat.header(
+                    appVersion = BuildConfig.VERSION_NAME,
+                    manufacturer = Build.MANUFACTURER,
+                    model = Build.MODEL,
+                    platform = Build.VERSION.RELEASE,
+                )
+            },
         )
     }
 }

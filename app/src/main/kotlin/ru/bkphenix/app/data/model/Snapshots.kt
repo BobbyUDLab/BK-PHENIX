@@ -10,6 +10,9 @@ import ru.bkphenix.core.radio.CellTechnology
 sealed interface SourceStatus {
     data object Idle : SourceStatus
     data object Active : SourceStatus
+
+    /** API зарегистрирован, но данных от него ещё не было. */
+    data object Waiting : SourceStatus
     data class Unsupported(val reason: String) : SourceStatus
     data class Unavailable(val reason: String) : SourceStatus
     data object PermissionDenied : SourceStatus
@@ -96,3 +99,6 @@ data class SensorSnapshot(
     val values: List<Float>,
     val timeMillis: Long,
 )
+
+/** Смещение сетевого времени относительно системных часов и способ его получения. */
+data class NetworkTimeSample(val offsetMillis: Long, val uncertaintyMillis: Long, val method: String)

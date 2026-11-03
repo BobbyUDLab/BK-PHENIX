@@ -10,6 +10,9 @@ import ru.bkphenix.core.radio.CellTechnology
 sealed interface SourceStatus {
     data object Idle : SourceStatus
     data object Active : SourceStatus
+
+    /** API зарегистрирован, но данных от него ещё не было. */
+    data object Waiting : SourceStatus
     data class Unsupported(val reason: String) : SourceStatus
     data class Unavailable(val reason: String) : SourceStatus
     data object PermissionDenied : SourceStatus

@@ -91,6 +91,7 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
         }
         val callback = object : GnssStatus.Callback() {
             override fun onSatelliteStatusChanged(status: GnssStatus) {
+                setStatus(SourceStatus.Active)
                 trySend(status.toSatellites())
             }
         }
@@ -101,7 +102,7 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
                 m.registerGnssStatusCallback(callback, handler)
             }
         } == true
-        setStatus(if (ok) SourceStatus.Active else SourceStatus.Unavailable("Статус спутников недоступен"))
+        setStatus(if (ok) SourceStatus.Waiting else SourceStatus.Unavailable("Статус спутников недоступен"))
         awaitClose { guarded("unregisterGnssStatusCallback") { m.unregisterGnssStatusCallback(callback) } }
     }
 
@@ -114,13 +115,15 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
         }
         val callback = object : GnssMeasurementsEvent.Callback() {
             override fun onGnssMeasurementsReceived(event: GnssMeasurementsEvent) {
+                _measurementsStatus.value = SourceStatus.Active
                 trySend(event.toBatch())
             }
 
             @Suppress("OVERRIDE_DEPRECATION", "DEPRECATION") // единственный способ узнать статус до API 33
             override fun onStatusChanged(status: Int) {
                 _measurementsStatus.value = when (status) {
-                    STATUS_READY -> SourceStatus.Active
+                    // READY означает лишь готовность API; «Работает» ставится по первым данным.
+                    STATUS_READY -> _measurementsStatus.value.takeIf { it == SourceStatus.Active } ?: SourceStatus.Waiting
                     STATUS_NOT_SUPPORTED -> SourceStatus.Unsupported("Чип не выдаёт сырые измерения")
                     else -> SourceStatus.Unavailable("Сырые измерения выключены (код $status)")
                 }
@@ -134,7 +137,7 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
                 m.registerGnssMeasurementsCallback(callback, handler)
             }
         } == true
-        if (!ok) _measurementsStatus.value = SourceStatus.Unsupported("Регистрация отклонена")
+        _measurementsStatus.value = if (ok) SourceStatus.Waiting else SourceStatus.Unsupported("Регистрация отклонена")
         awaitClose { guarded("unregisterGnssMeasurementsCallback") { m.unregisterGnssMeasurementsCallback(callback) } }
     }
 
@@ -148,13 +151,14 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
         }
         val callback = object : GnssNavigationMessage.Callback() {
             override fun onGnssNavigationMessageReceived(event: GnssNavigationMessage) {
+                _navigationStatus.value = SourceStatus.Active
                 NavigationMessageMapping.gpsL1caSubframe(event.svid, event.type, event.data)?.let { trySend(it) }
             }
 
             @Suppress("OVERRIDE_DEPRECATION", "DEPRECATION") // единственный способ узнать статус до API 33
             override fun onStatusChanged(status: Int) {
                 _navigationStatus.value = when (status) {
-                    STATUS_READY -> SourceStatus.Active
+                    STATUS_READY -> _navigationStatus.value.takeIf { it == SourceStatus.Active } ?: noNavigationYet()
                     STATUS_NOT_SUPPORTED -> SourceStatus.Unsupported("Чип не выдаёт навигационные сообщения")
                     else -> SourceStatus.Unavailable("Навигационные сообщения выключены (код $status)")
                 }
@@ -168,11 +172,15 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
                 m.registerGnssNavigationMessageCallback(callback, handler)
             }
         } == true
-        if (!ok) _navigationStatus.value = SourceStatus.Unsupported("Регистрация отклонена")
+        _navigationStatus.value = if (ok) noNavigationYet() else SourceStatus.Unsupported("Регистрация отклонена")
         awaitClose {
             guarded("unregisterGnssNavigationMessageCallback") { m.unregisterGnssNavigationMessageCallback(callback) }
         }
     }
+
+    /** Пока сообщений не было: если чип заявляет, что не умеет их выдавать, говорим об этом прямо. */
+    private fun noNavigationYet(): SourceStatus =
+        if (capabilities().navigationMessages == false) SourceStatus.Unsupported(NO_NAV_REASON) else SourceStatus.Waiting
 
     private fun GnssStatus.toSatellites(): List<SatelliteStatus> = (0 until satelliteCount).map { i ->
         val constellation = GnssMapping.constellation(getConstellationType(i))
@@ -237,5 +245,9 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
             agcDb = agc.takeIf { it.isNotEmpty() }?.average(),
             timeMillis = System.currentTimeMillis(),
         )
+    }
+
+    private companion object {
+        const val NO_NAV_REASON = "чип не отдаёт навигационные сообщения"
     }
 }

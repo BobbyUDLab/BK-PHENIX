@@ -1,6 +1,7 @@
 package ru.bkphenix.app.ui.satellites
 
 import ru.bkphenix.app.data.mapping.GnssMapping
+import ru.bkphenix.core.gnss.RawGnssEpoch
 import ru.bkphenix.core.model.GnssBand
 import ru.bkphenix.core.model.GnssConstellation
 import ru.bkphenix.core.model.SatelliteStatus
@@ -27,6 +28,29 @@ object SatelliteSummary {
             )
         }.sortedByDescending { it.visible }
 
-    /** Двухчастотный приём: есть сигналы L5/E5a/B2a. */
-    fun isDualFrequency(satellites: List<SatelliteStatus>): Boolean = satellites.any { it.band == GnssBand.L5 }
+    /**
+     * Двухчастотный приём: сигналы L5/E5a/B2a есть в статусе спутников или в сырых измерениях.
+     * null — данных ещё нет ни из одного источника.
+     */
+    fun isDualFrequency(satellites: List<SatelliteStatus>, measurementBands: Set<GnssBand>?): Boolean? {
+        val bands = satellites.map { it.band }.toSet() + measurementBands.orEmpty()
+        if (bands.none { it != GnssBand.UNKNOWN }) return null
+        return GnssBand.L5 in bands
+    }
+
+    /**
+     * Список спутников по сырым измерениям — запасной вариант для чипов, которые не присылают
+     * GnssStatus. Угол места и азимут в измерениях отсутствуют, поэтому NaN.
+     */
+    fun fromMeasurements(epoch: RawGnssEpoch): List<SatelliteStatus> = epoch.measurements.map { m ->
+        SatelliteStatus(
+            constellation = m.sat.constellation,
+            svid = m.sat.svid,
+            band = m.band,
+            cn0DbHz = m.cn0DbHz,
+            elevationDeg = Double.NaN,
+            azimuthDeg = Double.NaN,
+            usedInFix = false,
+        )
+    }.distinctBy { Triple(it.constellation, it.svid, it.band) }
 }

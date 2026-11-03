@@ -21,6 +21,7 @@ import ru.bkphenix.app.data.model.BleSnapshot
 import ru.bkphenix.app.data.model.CellSnapshot
 import ru.bkphenix.app.data.model.GnssCapabilitiesSnapshot
 import ru.bkphenix.app.data.model.MeasurementSummary
+import ru.bkphenix.app.data.model.NetworkTimeSample
 import ru.bkphenix.app.data.model.SensorKind
 import ru.bkphenix.app.data.model.SensorSnapshot
 import ru.bkphenix.app.data.model.SourceStatus
@@ -66,7 +67,7 @@ class PhenixRepository(
     private val wifi: WifiDataSource,
     private val ble: BleDataSource,
     private val sensors: SensorDataSource,
-    private val networkTime: NetworkTimeDataSource,
+    private val networkTimeSource: NetworkTimeDataSource,
     cellTowers: CellTowerDatabase = EmptyCellTowerDatabase,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
@@ -80,7 +81,7 @@ class PhenixRepository(
     private var pendingRaw: RawGnssEpoch? = null
     private var rawTimeOffsetMs: Long? = null
     private var gnssTimeOffsetMs: Long? = null
-    private var networkTimeOffsetMs: Long? = null
+    private var networkTimeSample: NetworkTimeSample? = null
     private var job: Job? = null
 
     private val _solution = MutableStateFlow<PhenixSolution?>(null)
@@ -107,8 +108,8 @@ class PhenixRepository(
     val bleList: StateFlow<List<BleSnapshot>> = _ble.asStateFlow()
     private val _sensors = MutableStateFlow<Map<SensorKind, SensorSnapshot>>(emptyMap())
     val sensorReadings: StateFlow<Map<SensorKind, SensorSnapshot>> = _sensors.asStateFlow()
-    private val _networkOffset = MutableStateFlow<Long?>(null)
-    val networkTimeOffsetMillis: StateFlow<Long?> = _networkOffset.asStateFlow()
+    private val _networkTime = MutableStateFlow<NetworkTimeSample?>(null)
+    val networkTime: StateFlow<NetworkTimeSample?> = _networkTime.asStateFlow()
     private val _running = MutableStateFlow(false)
     val running: StateFlow<Boolean> = _running.asStateFlow()
 
@@ -123,7 +124,7 @@ class PhenixRepository(
         "Wi-Fi RTT" to wifi.rttStatus,
         "Bluetooth/BLE" to ble.status,
         "Датчики" to sensors.status,
-        "Сетевое время" to networkTime.status,
+        "Сетевое время" to networkTimeSource.status,
     )
 
     @Synchronized
@@ -162,9 +163,9 @@ class PhenixRepository(
             collectSafely(wifi.scans()) { _wifi.value = it }
             collectSafely(ble.beacons()) { _ble.value = it }
             collectSafely(sensors.readings()) { s -> _sensors.update { it + (s.kind to s) } }
-            collectSafely(networkTime.offsets()) {
-                networkTimeOffsetMs = it
-                _networkOffset.value = it
+            collectSafely(networkTimeSource.samples()) {
+                networkTimeSample = it
+                _networkTime.value = it
             }
             while (true) {
                 solveEpoch()
@@ -200,7 +201,7 @@ class PhenixRepository(
         val time = buildList {
             // Время по часам приёмника точнее времени Location; если сырых данных нет — берём Location.
             (rawTimeOffsetMs ?: gnssTimeOffsetMs)?.let { add(TimeObservation(TimeSource.GNSS, now + it, GNSS_TIME_UNCERTAINTY_MS)) }
-            networkTimeOffsetMs?.let { add(TimeObservation(TimeSource.NITZ, now + it, NETWORK_TIME_UNCERTAINTY_MS)) }
+            networkTimeSample?.let { add(TimeObservation(TimeSource.NITZ, now + it.offsetMillis, it.uncertaintyMillis)) }
         }
         val subframes = pendingSubframes.toList().also { pendingSubframes.clear() }
         val raw = pendingRaw.also { pendingRaw = null }
@@ -224,6 +225,5 @@ class PhenixRepository(
         const val EPOCH_MILLIS = 1_000L
         const val STATUS_STALE_MILLIS = 5_000L
         const val GNSS_TIME_UNCERTAINTY_MS = 1_000L
-        const val NETWORK_TIME_UNCERTAINTY_MS = 1_000L
     }
 }

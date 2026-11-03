@@ -22,7 +22,7 @@ class AppContainer(context: Context) {
             wifi = WifiDataSource(app),
             ble = BleDataSource(app),
             sensors = SensorDataSource(app),
-            networkTime = NetworkTimeDataSource(),
+            networkTimeSource = NetworkTimeDataSource(app),
         )
     }
 }

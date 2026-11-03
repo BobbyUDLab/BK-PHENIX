@@ -10,6 +10,7 @@ import ru.bkphenix.app.data.PhenixRepository
 import ru.bkphenix.app.data.model.BleSnapshot
 import ru.bkphenix.app.data.model.CellSnapshot
 import ru.bkphenix.app.data.model.GnssCapabilitiesSnapshot
+import ru.bkphenix.app.data.model.NetworkTimeSample
 import ru.bkphenix.app.data.model.SensorKind
 import ru.bkphenix.app.data.model.SensorSnapshot
 import ru.bkphenix.app.data.model.SourceStatus
@@ -22,7 +23,7 @@ data class DiagnosticsUiState(
     val wifi: List<WifiSnapshot> = emptyList(),
     val ble: List<BleSnapshot> = emptyList(),
     val sensors: Map<SensorKind, SensorSnapshot> = emptyMap(),
-    val networkTimeOffsetMillis: Long? = null,
+    val networkTime: NetworkTimeSample? = null,
 )
 
 class DiagnosticsViewModel(repository: PhenixRepository) : ViewModel() {
@@ -37,7 +38,7 @@ class DiagnosticsViewModel(repository: PhenixRepository) : ViewModel() {
         repository.capabilities,
         radio,
         repository.sensorReadings,
-        repository.networkTimeOffsetMillis,
+        repository.networkTime,
     ) { statuses, caps, (cells, wifi, ble), sensors, offset ->
         DiagnosticsUiState(
             statuses = statuses,
@@ -46,7 +47,7 @@ class DiagnosticsViewModel(repository: PhenixRepository) : ViewModel() {
             wifi = wifi.sortedByDescending { it.rssiDbm },
             ble = ble,
             sensors = sensors,
-            networkTimeOffsetMillis = offset,
+            networkTime = offset,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DiagnosticsUiState())
 }

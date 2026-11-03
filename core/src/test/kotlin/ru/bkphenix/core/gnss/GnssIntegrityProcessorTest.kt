@@ -49,3 +49,21 @@ class GnssIntegrityProcessorTest {
         assertNull(PhenixCore().solve(listOf(chip(0.0)), 1_000).gnss)
     }
 }
+
+class NitzDeduplicationTest {
+    @Test
+    fun `расхождение с NITZ при сырых данных сообщается один раз`() {
+        val s = SyntheticEpoch(noiseM = 1.0, seed = 21)
+        val core = PhenixCore(gnssProcessor = GnssIntegrityProcessor(ephemerides = s.store))
+        val time = listOf(
+            ru.bkphenix.core.model.TimeObservation(ru.bkphenix.core.model.TimeSource.GNSS, 1_000_000, 100),
+            ru.bkphenix.core.model.TimeObservation(ru.bkphenix.core.model.TimeSource.NITZ, 1_900_000, 100),
+        )
+        val obs = listOf(PositionObservation(PositionSource.GNSS, s.truth, 5.0, 1_000))
+        val withRaw = core.solve(obs, 1_000, timeObservations = time, rawGnss = s.epoch())
+        assertEquals(IntegrityState.SPOOFING_SUSPECTED, withRaw.integrity.state)
+        assertEquals(1, withRaw.integrity.reasons.count { "NITZ" in it })
+        val withoutRaw = PhenixCore().solve(obs, 1_000, timeObservations = time)
+        assertEquals(1, withoutRaw.integrity.reasons.count { "NITZ" in it })
+    }
+}

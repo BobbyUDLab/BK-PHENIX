@@ -62,9 +62,8 @@ public class WlsSolver(
             .mapNotNull { (sat, list) ->
                 val pr = list.maxBy { it.measurement.cn0DbHz }
                 if (sat.constellation != ru.bkphenix.core.model.GnssConstellation.GPS) return@mapNotNull null
-                val eph = ephemerides[sat.svid]?.takeIf { it.isHealthy } ?: return@mapNotNull null
                 var tTx = pr.receiveTow - pr.rangeM / GpsEphemeris.C
-                if (!eph.isValidAt(tTx)) return@mapNotNull null
+                val eph = ephemerides.select(sat.svid, pr.gpsWeek, tTx)?.takeIf { it.isHealthy } ?: return@mapNotNull null
                 // t = t_sv − Δt_sv; Δt_sv зависит от t, достаточно двух приближений.
                 var state = eph.stateAt(tTx)
                 tTx -= state.clockBiasS

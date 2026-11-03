@@ -1,0 +1,111 @@
+package ru.bkphenix.core.gnss
+
+import java.time.LocalDate
+import java.time.temporal.ChronoUnit
+
+/**
+ * Разбор GPS LNAV из навигационных файлов RINEX 3.x/4.x (broadcast ephemeris, например BRDC IGS).
+ * Прочие системы и записи RINEX 4, отличные от LNAV, пропускаются. Углы в RINEX уже в радианах,
+ * toe — в секундах GPS-недели; toc переводится из календарной даты GPS-времени.
+ */
+public object RinexNavParser {
+    private val GPS_EPOCH: LocalDate = LocalDate.of(1980, 1, 6)
+    private const val SECONDS_PER_DAY = 86_400.0
+    private const val SECONDS_PER_WEEK = 604_800.0
+    private const val ORBIT_LINES = 7
+    private const val FIELD_WIDTH = 19
+    private const val RECORD_START = 23
+    private const val ORBIT_START = 4
+    private val recordStart = Regex("^[GRECJSI][ 0-9]\\d \\d{4} ")
+
+    /** Все записи GPS LNAV файла; повреждённые записи пропускаются. */
+    public fun parseGps(text: String): List<GpsEphemeris> {
+        val lines = text.lineSequence().toList()
+        val body = lines.indexOfFirst { it.contains("END OF HEADER") }.let { if (it < 0) 0 else it + 1 }
+        val result = ArrayList<GpsEphemeris>()
+        var lnavExpected = true
+        var i = body
+        while (i < lines.size) {
+            val line = lines[i]
+            when {
+                // RINEX 4: «> EPH G01 LNAV» перед записью задаёт её тип.
+                line.startsWith(">") -> {
+                    lnavExpected = line.startsWith("> EPH") && line.contains(" G") && line.trim().endsWith("LNAV")
+                    i++
+                }
+                line.startsWith("G") && recordStart.containsMatchIn(line) && lnavExpected &&
+                    i + ORBIT_LINES < lines.size + 1 -> {
+                    parseRecord(lines.subList(i, minOf(i + ORBIT_LINES + 1, lines.size)))?.let(result::add)
+                    i += ORBIT_LINES + 1
+                }
+                else -> i++
+            }
+        }
+        return result
+    }
+
+    private fun parseRecord(rec: List<String>): GpsEphemeris? {
+        if (rec.size < ORBIT_LINES + 1) return null
+        return try {
+            val head = rec[0]
+            val svid = head.substring(1, 3).trim().toInt()
+            val year = head.substring(4, 8).trim().toInt()
+            val month = head.substring(9, 11).trim().toInt()
+            val day = head.substring(12, 14).trim().toInt()
+            val hour = head.substring(15, 17).trim().toInt()
+            val minute = head.substring(18, 20).trim().toInt()
+            val second = head.substring(21, 23).trim().toInt()
+            val af = fields(head, RECORD_START, 3)
+            val o = (1..ORBIT_LINES).map { fields(rec[it], ORBIT_START, 4) }
+            val days = ChronoUnit.DAYS.between(GPS_EPOCH, LocalDate.of(year, month, day))
+            val toc = (days % 7) * SECONDS_PER_DAY + hour * 3600.0 + minute * 60.0 + second
+            val week = o[4][2].toInt()
+            GpsEphemeris(
+                svid = svid,
+                weekMod1024 = week % 1024,
+                health = o[5][1].toInt(),
+                uraIndex = uraIndex(o[5][0]),
+                iodc = o[5][3].toInt(),
+                iode = o[0][0].toInt(),
+                tgd = o[5][2],
+                toc = toc.coerceIn(0.0, SECONDS_PER_WEEK),
+                af0 = af[0], af1 = af[1], af2 = af[2],
+                toe = o[2][0],
+                sqrtA = o[1][3],
+                eccentricity = o[1][1],
+                i0 = o[3][0],
+                omega0 = o[2][2],
+                omega = o[3][2],
+                m0 = o[0][3],
+                deltaN = o[0][2],
+                omegaDot = o[3][3],
+                iDot = o[4][0],
+                cuc = o[1][0], cus = o[1][2],
+                crc = o[3][1], crs = o[0][1],
+                cic = o[2][1], cis = o[2][3],
+            ).takeIf { it.sqrtA > 0 }
+        } catch (e: NumberFormatException) {
+            null
+        } catch (e: IndexOutOfBoundsException) {
+            null
+        }
+    }
+
+    /** Поля фиксированной ширины (D19.12); отсутствующие в конце строки считаются нулём. */
+    private fun fields(line: String, start: Int, count: Int): DoubleArray = DoubleArray(count) { k ->
+        val from = start + k * FIELD_WIDTH
+        if (from >= line.length) {
+            0.0
+        } else {
+            val raw = line.substring(from, minOf(from + FIELD_WIDTH, line.length)).trim()
+            if (raw.isEmpty()) 0.0 else raw.replace('D', 'E').replace('d', 'E').toDouble()
+        }
+    }
+
+    /** Индекс URA (IS-GPS-200, 20.3.3.3.1.3) по точности в метрах из RINEX. */
+    private fun uraIndex(meters: Double): Int {
+        val bounds = doubleArrayOf(2.4, 3.4, 4.85, 6.85, 9.65, 13.65, 24.0, 48.0, 96.0, 192.0, 384.0, 768.0, 1536.0, 3072.0, 6144.0)
+        val idx = bounds.indexOfFirst { meters <= it }
+        return if (idx < 0) 15 else idx
+    }
+}

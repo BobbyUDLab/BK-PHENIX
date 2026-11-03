@@ -10,12 +10,14 @@ import ru.bkphenix.core.model.TimeObservation
 public data class GnssIntegrityResult(
     val raim: RaimResult?,
     val detectors: List<DetectorResult>,
-    /** Сколько спутников GPS имеют эфемериды из навигационных сообщений. */
+    /** Сколько спутников GPS имеют эфемериды (из навигационных сообщений или внешние). */
     val ephemerisCount: Int,
     val pseudorangeCount: Int,
     /** Собственное решение, если RAIM его подтвердил (OK или после исключения). */
     val ownSolution: WlsSolution?,
     val report: IntegrityReport,
+    /** Из них спутников с внешними эфемеридами (RINEX). */
+    val externalEphemerisCount: Int = 0,
 )
 
 /**
@@ -61,7 +63,8 @@ public class GnssIntegrityProcessor(
         return GnssIntegrityResult(
             raim = raimResult,
             detectors = detectors,
-            ephemerisCount = ephemerides.size,
+            ephemerisCount = ephemerides.availableSvids.size,
+            externalEphemerisCount = ephemerides.externalSize,
             pseudorangeCount = ranges.size,
             ownSolution = own,
             report = IntegrityReport.merge(listOf(raimReport, SpoofingMonitor.report(detectors))),

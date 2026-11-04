@@ -3,6 +3,7 @@ package ru.bkphenix.app
 import android.content.Context
 import android.os.Build
 import ru.bkphenix.app.data.PhenixRepository
+import ru.bkphenix.app.data.map.MapFileStore
 import ru.bkphenix.app.data.log.GnssLoggerFormat
 import ru.bkphenix.app.data.log.RawLogRecorder
 import ru.bkphenix.app.data.source.BleDataSource
@@ -45,4 +46,6 @@ class AppContainer(context: Context) {
     val trackRecorder: TrackRecorder by lazy {
         TrackRecorder(TrackDatabase.create(app).tracks(), repository.solution, File(app.filesDir, "gpx"))
     }
+
+    val mapFiles: MapFileStore by lazy { MapFileStore(app) }
 }

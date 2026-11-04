@@ -19,7 +19,9 @@ class GnssIntegrityProcessorTest {
 
     @Test
     fun `чистая эпоха — собственное решение совпадает с чипом, целостность OK`() {
-        val sol = core().solve(listOf(chip(3.0)), 1_000, rawGnss = s.epoch())
+        // Второй независимый голос (сота) нужен для кворума.
+        val cell = PositionObservation(PositionSource.CELL, s.truth, 100.0, 1_000)
+        val sol = core().solve(listOf(chip(3.0), cell), 1_000, rawGnss = s.epoch())
         val g = sol.gnss!!
         assertEquals(RaimStatus.OK, g.raim!!.status)
         assertNotNull(g.ownSolution)
@@ -33,6 +35,13 @@ class GnssIntegrityProcessorTest {
         val sol = core().solve(listOf(chip(3.0)), 1_000, rawGnss = s.epoch(faultsM = mapOf(bad to 400.0)))
         assertEquals(RaimStatus.EXCLUDED, sol.gnss!!.raim!!.status)
         assertTrue(sol.integrity.reasons.any { "G" + bad.toString().padStart(2, '0') in it })
+    }
+
+    @Test
+    fun `только ГНСС — согласовано, но без кворума`() {
+        val sol = core().solve(listOf(chip(3.0)), 1_000, rawGnss = s.epoch())
+        assertEquals(IntegrityState.SUSPICIOUS, sol.integrity.state)
+        assertEquals(1, sol.comparison.independentConfirmations)
     }
 
     @Test

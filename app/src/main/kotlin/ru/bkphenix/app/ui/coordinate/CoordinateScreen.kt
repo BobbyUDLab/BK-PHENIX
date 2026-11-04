@@ -155,7 +155,7 @@ private val Bad = Color(0xFFD93A3A)
 
 private fun IntegrityState.color(): Color = when (this) {
     IntegrityState.OK -> Ok
-    IntegrityState.NO_DATA, IntegrityState.INCONSISTENT -> Warn
+    IntegrityState.NO_DATA, IntegrityState.INCONSISTENT, IntegrityState.SUSPICIOUS -> Warn
     else -> Bad
 }
 

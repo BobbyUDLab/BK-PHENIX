@@ -11,6 +11,7 @@ import ru.bkphenix.core.model.isTimeConsistent
 public enum class IntegrityState(public val description: String) {
     OK("Источники согласованы"),
     NO_DATA("Нет данных о местоположении"),
+    SUSPICIOUS("Источники согласованы, но подтверждение недостаточно"),
     INCONSISTENT("Источники не согласуются между собой"),
     GNSS_LOST("ГНСС недоступна: возможно глушение"),
     NAV_DATA_CORRUPTED("Ошибки чётности навигационных сообщений"),
@@ -74,6 +75,19 @@ public class ConsistencyIntegrityEngine : IntegrityEngine {
                 IntegrityState.INCONSISTENT,
                 others.map { "Отсеян источник: ${it.source.displayName}" },
             )
+        }
+        val comparison = context.comparison
+        if (comparison.estimate != null && !comparison.hasQuorum) {
+            val weak = comparison.votes.filter { v -> v.observations.all { it.source.mayUseGnss } }
+            val why = buildString {
+                append("Итог подтверждают ${comparison.strongConfirmations} незав. групп(ы), нужно ${ComparisonResult.QUORUM}")
+                if (weak.isNotEmpty()) {
+                    append("; не засчитано: ")
+                    append(weak.flatMap { it.observations }.joinToString { it.source.displayName })
+                    append(" (может опираться на GNSS)")
+                }
+            }
+            reports += IntegrityReport(IntegrityState.SUSPICIOUS, listOf(why))
         }
         val gnssTime = context.timeObservations.firstOrNull { it.source == TimeSource.GNSS }
         val nitzTime = context.timeObservations.firstOrNull { it.source == TimeSource.NITZ }

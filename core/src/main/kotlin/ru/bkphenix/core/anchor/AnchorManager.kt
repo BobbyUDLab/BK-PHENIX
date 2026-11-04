@@ -1,6 +1,8 @@
 package ru.bkphenix.core.anchor
 
 import ru.bkphenix.core.geo.GeoPoint
+import ru.bkphenix.core.model.PositionObservation
+import ru.bkphenix.core.model.PositionSource
 import kotlin.math.sqrt
 
 /** Состояние якоря пользователя. */
@@ -56,6 +58,16 @@ public class AnchorManager(
 
     public fun setAnchor(anchor: Anchor) {
         this.anchor = anchor
+    }
+
+    /**
+     * Якорь как наблюдение для компаратора: σ растёт на `maxSpeed·Δt`, источник — ориентир
+     * (группа «человек»). `null`, если якоря нет.
+     */
+    public fun observation(nowMillis: Long): PositionObservation? {
+        val a = anchor ?: return null
+        val elapsedS = ((nowMillis - a.timestampMillis).coerceAtLeast(0)) / 1000.0
+        return PositionObservation(PositionSource.LANDMARK, a.point, a.accuracyM + maxSpeedMps * elapsedS, nowMillis)
     }
 
     public fun clear() {

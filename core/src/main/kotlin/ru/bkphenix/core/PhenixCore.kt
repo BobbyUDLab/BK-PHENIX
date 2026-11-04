@@ -19,6 +19,7 @@ import ru.bkphenix.core.integrity.IntegrityReport
 import ru.bkphenix.core.integrity.IntegrityState
 import ru.bkphenix.core.integrity.NavigationWord
 import ru.bkphenix.core.model.PositionObservation
+import ru.bkphenix.core.model.PositionSource
 import ru.bkphenix.core.model.TimeObservation
 
 /** Итоговое решение одной эпохи. */
@@ -33,9 +34,10 @@ public data class PhenixSolution(
 )
 
 /**
- * Единый контур доверия: компаратор → контроль целостности (включая RAIM и детекторы подмены
- * по сырым измерениям) → проверка якорем. Собственное решение по псевдодальностям в компаратор
- * не добавляется: оно использует те же сигналы, что и чип, и не является независимым источником.
+ * Единый контур доверия: RAIM и детекторы подмены по сырым измерениям → компаратор → контроль
+ * целостности → проверка якорем. Собственное решение WLS идёт в компаратор как источник
+ * [PositionSource.GNSS_WLS] той же группы, что и чип ([ru.bkphenix.core.model.SourceGroup.GNSS_SIGNAL]):
+ * оно уточняет GNSS-голос, но никогда не считается независимым подтверждением чипа.
  */
 public class PhenixCore(
     private val comparator: PositionComparator = PositionComparator(),
@@ -55,8 +57,11 @@ public class PhenixCore(
     ): PhenixSolution {
         gnssProcessor.addSubframes(navigationSubframes)
         val words = navigationWords + navigationSubframes.flatMap { it.words }
-        val comparison = comparator.compare(observations)
         val gnss = rawGnss?.let { gnssProcessor.process(it, observations, timeObservations) }
+        val wls = gnss?.ownSolution?.let {
+            PositionObservation(PositionSource.GNSS_WLS, it.point, it.horizontalSigmaM.coerceAtLeast(MIN_WLS_SIGMA_M), nowMillis)
+        }
+        val comparison = comparator.compare(observations + listOfNotNull(wls))
         // При сырых данных время сверяет детектор NITZ с подробностями; общий движок его не дублирует.
         val timeForEngine = if (gnss != null) emptyList() else timeObservations
         var integrity = integrityEngine.evaluate(
@@ -78,5 +83,10 @@ public class PhenixCore(
             comparison = comparison,
             gnss = gnss,
         )
+    }
+
+    private companion object {
+        /** Нижняя граница σ собственного решения: модель ошибок псевдодальностей оптимистична. */
+        const val MIN_WLS_SIGMA_M = 3.0
     }
 }

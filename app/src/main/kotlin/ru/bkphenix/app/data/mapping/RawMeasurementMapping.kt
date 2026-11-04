@@ -1,5 +1,6 @@
 package ru.bkphenix.app.data.mapping
 
+import ru.bkphenix.core.gnss.MeasurementState
 import ru.bkphenix.core.gnss.RawGnssClock
 import ru.bkphenix.core.gnss.RawGnssMeasurement
 import ru.bkphenix.core.gnss.SatId
@@ -36,7 +37,7 @@ object RawMeasurementMapping {
         receivedSvTimeNanos = receivedSvTimeNanos,
         receivedSvTimeUncertaintyNanos = receivedSvTimeUncertaintyNanos,
         timeOffsetNanos = timeOffsetNanos,
-        towKnown = isTowKnown(state),
+        towKnown = MeasurementState.isTimeKnown(GnssMapping.constellation(constellationType), state),
         pseudorangeRateMps = pseudorangeRateMps,
         agcDb = agcDb,
     )

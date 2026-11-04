@@ -40,11 +40,18 @@ public data class GpsEphemeris(
     val crs: Double,
     val cic: Double,
     val cis: Double,
-) {
-    val isHealthy: Boolean get() = health == 0
+) : NavEphemeris {
+    override val sat: SatId get() = SatId(ru.bkphenix.core.model.GnssConstellation.GPS, svid)
+    override val isHealthy: Boolean get() = health == 0
+
+    /** Неделя по модулю 1024: [ageSeconds] учитывает перенос. */
+    override val referenceWeek: Int get() = weekMod1024
+    override val referenceTow: Double get() = toe
+    override val fitHalfWidthS: Double get() = FIT_INTERVAL_S
 
     /** Положение спутника (ECEF на момент [tow]) и поправка часов. */
-    public fun stateAt(tow: Double): SatelliteState {
+    override fun stateAt(gpsTow: Double): SatelliteState {
+        val tow = gpsTow
         val a = sqrtA * sqrtA
         val tk = wrapWeek(tow - toe)
         val n = sqrt(MU / (a * a * a)) + deltaN
@@ -73,7 +80,8 @@ public data class GpsEphemeris(
 
     /** Эфемериды пригодны в окне ±[FIT_INTERVAL_S] от toe. */
     /** Возраст эфемерид в момент (неделя GPS, секунды недели) с учётом номера недели, секунды. */
-    public fun ageSeconds(gpsWeek: Int, tow: Double): Double {
+    override fun ageSeconds(gpsWeek: Int, gpsTow: Double): Double {
+        val tow = gpsTow
         var weeks = (gpsWeek - weekMod1024).mod(WEEK_ROLLOVER)
         if (weeks > WEEK_ROLLOVER / 2) weeks -= WEEK_ROLLOVER
         return weeks * 2 * HALF_WEEK + tow - toe

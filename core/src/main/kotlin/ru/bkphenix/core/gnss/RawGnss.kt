@@ -21,6 +21,19 @@ public data class SatId(val constellation: GnssConstellation, val svid: Int) {
     override fun toString(): String = label
 }
 
+/** Биты GnssMeasurement.getState(), от которых зависит, известно ли время излучения целиком. */
+public object MeasurementState {
+    public const val TOW_DECODED: Int = 0x8
+    public const val TOW_KNOWN: Int = 0x4000
+    public const val GLO_TOD_DECODED: Int = 0x80
+    public const val GLO_TOD_KNOWN: Int = 0x8000
+
+    /** ГЛОНАСС передаёт время суток (TOD), остальные системы — время недели (TOW). */
+    public fun isTimeKnown(constellation: GnssConstellation, state: Int): Boolean =
+        if (constellation == GnssConstellation.GLONASS) state and (GLO_TOD_DECODED or GLO_TOD_KNOWN) != 0
+        else state and (TOW_DECODED or TOW_KNOWN) != 0
+}
+
 /** Часы приёмника из GnssClock, без зависимости от Android. */
 public data class RawGnssClock(
     val timeNanos: Long,
@@ -42,7 +55,7 @@ public data class RawGnssMeasurement(
     val receivedSvTimeNanos: Long,
     val receivedSvTimeUncertaintyNanos: Long,
     val timeOffsetNanos: Double = 0.0,
-    /** Время недели декодировано или известно (STATE_TOW_DECODED | STATE_TOW_KNOWN). */
+    /** Время излучения известно целиком: TOW, а для ГЛОНАСС — TOD ([MeasurementState.isTimeKnown]). */
     val towKnown: Boolean,
     val pseudorangeRateMps: Double? = null,
     /** Уровень АРУ, дБ, если чип его сообщает. */
@@ -83,10 +96,11 @@ public object Pseudoranges {
     }
 
     /**
-     * Псевдодальности GPS, QZSS и Galileo (время недели совпадает с GPS с точностью до нс): ρ = c · (t_rx − t_tx).
-     * Измерения без известного TOW и вне правдоподобного диапазона отбрасываются.
+     * Псевдодальности всех систем с известным временем излучения: ρ = c · (t_rx − t_tx), где t_rx
+     * переводится в шкалу системы (GPS, QZSS, Galileo — неделя GPST; BeiDou — неделя BDT;
+     * ГЛОНАСС — сутки UTC(SU) + 3 ч). Время приёма в [Pseudorange.receiveTow] — всегда GPST.
      */
-    public fun compute(epoch: RawGnssEpoch): List<Pseudorange> {
+    public fun compute(epoch: RawGnssEpoch, leapSeconds: Int = DEFAULT_LEAP_SECONDS): List<Pseudorange> {
         val fullBias = epoch.clock.fullBiasNanos ?: return emptyList()
         val gpsNanos = epoch.clock.timeNanos - fullBias
         if (gpsNanos <= 0) return emptyList()
@@ -94,16 +108,23 @@ public object Pseudoranges {
         val towNanosLong = gpsNanos - week * NANOS_PER_WEEK
         return epoch.measurements.mapNotNull { m ->
             if (!m.towKnown) return@mapNotNull null
-            if (m.sat.constellation !in SAME_WEEK_TIME_SCALES) {
-                return@mapNotNull null
+            val rxGps = towNanosLong.toDouble() + m.timeOffsetNanos - epoch.clock.biasNanos
+            val (rxSystem, period) = when (m.sat.constellation) {
+                in SAME_WEEK_TIME_SCALES -> rxGps to NANOS_PER_WEEK.toDouble()
+                GnssConstellation.BEIDOU -> (rxGps + GpsTime.BDT_MINUS_GPST_S * NANOS_PER_SECOND).mod(NANOS_PER_WEEK.toDouble()) to
+                    NANOS_PER_WEEK.toDouble()
+                GnssConstellation.GLONASS -> {
+                    val day = GpsTime.SECONDS_PER_DAY * NANOS_PER_SECOND
+                    (rxGps + (GpsTime.GLONASS_UTC_OFFSET_S - leapSeconds) * NANOS_PER_SECOND).mod(day) to day
+                }
+                else -> return@mapNotNull null
             }
-            val rxNanos = towNanosLong.toDouble() + m.timeOffsetNanos - epoch.clock.biasNanos
-            var dt = rxNanos - m.receivedSvTimeNanos.toDouble()
-            // Переход через начало недели между излучением и приёмом.
-            if (dt < 0) dt += NANOS_PER_WEEK.toDouble()
+            var dt = rxSystem - m.receivedSvTimeNanos.toDouble()
+            // Переход через начало недели (суток) между излучением и приёмом.
+            if (dt < 0) dt += period
             val range = dt / NANOS_PER_SECOND * GpsEphemeris.C
             if (range !in MIN_RANGE_M..MAX_RANGE_M) return@mapNotNull null
-            Pseudorange(m, rxNanos / NANOS_PER_SECOND, week, range, sigmaFor(m))
+            Pseudorange(m, rxGps / NANOS_PER_SECOND, week, range, sigmaFor(m))
         }
     }
 

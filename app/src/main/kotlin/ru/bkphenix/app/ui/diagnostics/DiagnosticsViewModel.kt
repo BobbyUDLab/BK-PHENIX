@@ -31,6 +31,7 @@ data class DiagnosticsUiState(
 class DiagnosticsViewModel(private val repository: PhenixRepository) : ViewModel() {
     val logState: StateFlow<RawLogState> = repository.logState
     val rinexInfo: StateFlow<RinexEphemerisInfo?> = repository.rinexInfo
+    val cellDatabase: StateFlow<ru.bkphenix.app.data.cells.CellDatabaseInfo?> = repository.cellDatabaseInfo
 
     fun toggleLog() = if (repository.logState.value.recording) repository.stopLog() else repository.startLog()
 

@@ -115,6 +115,9 @@ class PhenixRepository(
     private val _ble = MutableStateFlow<List<BleSnapshot>>(emptyList())
     val bleList: StateFlow<List<BleSnapshot>> = _ble.asStateFlow()
     private val _sensors = MutableStateFlow<Map<SensorKind, SensorSnapshot>>(emptyMap())
+    /** Холодный поток ИИБ для счисления пути; датчики работают, пока есть подписчик. */
+    val imuSamples: kotlinx.coroutines.flow.Flow<ru.bkphenix.core.inertial.ImuSample> get() = sensors.imu()
+
     val sensorReadings: StateFlow<Map<SensorKind, SensorSnapshot>> = _sensors.asStateFlow()
     private val _networkTime = MutableStateFlow<NetworkTimeSample?>(null)
     val networkTime: StateFlow<NetworkTimeSample?> = _networkTime.asStateFlow()

@@ -52,6 +52,9 @@ internal class SyntheticEpoch(
         receiver.enuTo(eph.stateAt(tow - 0.075).position).elevationDeg >= mask
     }
 
+    /** Угол места спутника в точке [truth], градусы. */
+    fun elevationDeg(eph: NavEphemeris): Double = receiver.enuTo(eph.stateAt(tow - 0.075).position).elevationDeg
+
     fun epoch(
         sats: List<NavEphemeris> = visibleAll(),
         faultsM: Map<Int, Double> = emptyMap(),

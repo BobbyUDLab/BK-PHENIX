@@ -128,4 +128,20 @@ class ContinuityTest {
             assertTrue(r.dropped.isNotEmpty(), "t=$t: поддельный GNSS принят")
         }
     }
+
+    @Test
+    fun `дрейф счисления и сети не даёт ложного плавного увода`() {
+        val m = ContinuityMonitor()
+        var truth = start
+        repeat(900) { t ->
+            truth = truth.offset(1.2, 30.0)
+            val obs = listOf(
+                PositionObservation(PositionSource.GNSS, noisy(truth, 3.0), 3.0, 0),
+                // Счисление уходит на 0,3 м/с, сеть с постоянным смещением 40 м при заявленных 10 м.
+                PositionObservation(PositionSource.DEAD_RECKONING, truth.offset(0.3 * t, 120.0), 5.0, 0),
+                PositionObservation(PositionSource.NETWORK, truth.offset(40.0, 200.0), 10.0, 0),
+            )
+            assertEquals(IntegrityState.OK, m.check(obs, t * 1000L).report.state, "t=$t")
+        }
+    }
 }

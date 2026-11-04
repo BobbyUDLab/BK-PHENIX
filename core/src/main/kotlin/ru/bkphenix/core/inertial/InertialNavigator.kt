@@ -49,6 +49,22 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
     private var lastConstraintNanos = 0L
     private var stationary = false
     private var distanceSinceFix = 0.0
+    private val gyroBias = DoubleArray(3)
+    private var headingOffsetDeg = 0.0
+    private var headingOffsetSigmaDeg = INITIAL_HEADING_SIGMA_DEG
+    private var alignAnchor: GeoPoint? = null
+    private var stepSin = 0.0
+    private var stepCos = 0.0
+    private var stepCount = 0
+    private var magSeen = false
+    private var headingAligned = false
+    private var stillSamples = 0
+
+    /** Оценка смещения гироскопа, рад/с (обновляется в покое). */
+    public val gyroBiasRadS: DoubleArray get() = gyroBias.copyOf()
+
+    /** Откалиброван ли гироскоп: накоплено ≥ 2 с покоя. */
+    public val gyroCalibrated: Boolean get() = stillSamples >= GYRO_CALIBRATED_SAMPLES
 
     /**
      * Магнитное склонение, градусы (восток положителен): истинный курс = магнитный + склонение.
@@ -65,8 +81,15 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
         if (prev == null || s.timeNanos <= prev) return
         val dt = (s.timeNanos - prev) / 1e9
         if (dt > MAX_IMU_GAP_S) return
-        orientation.update(s.gyro, s.accel, s.mag, dt)
+        if (s.mag != null) magSeen = true
         stationary = zupt.update(s.accel, s.gyro)
+        // Калибровка смещения гироскопа в покое (ZUPT): в покое истинная угловая скорость ≈ 0.
+        if (stationary) {
+            for (k in 0..2) gyroBias[k] += GYRO_BIAS_GAIN * (s.gyro[k] - gyroBias[k])
+            stillSamples++
+        }
+        val gyro = DoubleArray(3) { s.gyro[it] - gyroBias[it] }
+        orientation.update(gyro, s.accel, s.mag, dt)
         if (!filter.isInitialized) return
         val ms = s.timeNanos / NANOS_PER_MILLI
         filter.predict(ms)
@@ -79,7 +102,9 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
             MotionMode.WALK -> steps.update(s.timeNanos, s.accel)?.let { step ->
                 val period = lastStepNanos?.let { (step.timeNanos - it) / 1e9 }?.coerceIn(MIN_STEP_S, MAX_STEP_S) ?: TYPICAL_STEP_S
                 lastStepNanos = step.timeNanos
-                filter.updateVelocity(step.lengthM / period, headingDeg, PDR_SPEED_SIGMA)
+                val raw = Math.toRadians(headingDeg)
+                stepSin += kotlin.math.sin(raw); stepCos += kotlin.math.cos(raw); stepCount++
+                filter.updateVelocity(step.lengthM / period, normalizeDeg(headingDeg + headingOffsetDeg), PDR_SPEED_SIGMA)
             }
             MotionMode.CAR -> {
                 filter.rotateVelocity(orientation.verticalRate(s.gyro) * dt)
@@ -95,6 +120,7 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
     /** Решение ГНСС (или итог компаратора) с СКО [sigmaM]; true — принято фильтром. */
     public fun onFix(point: GeoPoint, sigmaM: Double, timeMillis: Long): Boolean {
         val ok = filter.updatePosition(point, sigmaM, timeMillis)
+        if (ok) alignHeading(point, sigmaM)
         if (ok) {
             lastFixMillis = timeMillis
             distanceSinceFix = 0.0
@@ -102,13 +128,48 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
         return ok
     }
 
+    /**
+     * Выравнивание курса шагов по курсу ГНСС: телефон держат как угодно (в руке, в кармане), магнитометр
+     * у домов искажён, без него курс по гироскопу произволен. Смещение «курс телефона → курс движения»
+     * оценивается по участкам между решениями длиной ≥ [ALIGN_MIN_DISTANCE_M]; его σ входит в погрешность.
+     */
+    private fun alignHeading(point: GeoPoint, sigmaM: Double) {
+        val anchor = alignAnchor
+        // Без магнитометра курс телефона произволен: смещение неизвестно в пределах ±180°.
+        if (!magSeen && !headingAligned) headingOffsetSigmaDeg = NO_MAG_HEADING_SIGMA_DEG
+        if (anchor == null || stepCount == 0) {
+            alignAnchor = point; stepSin = 0.0; stepCos = 0.0; stepCount = 0
+            return
+        }
+        val d = anchor.distanceTo(point)
+        if (d < ALIGN_MIN_DISTANCE_M.coerceAtLeast(4 * sigmaM)) return
+        if (stepCount >= ALIGN_MIN_STEPS) {
+            val course = anchor.bearingTo(point)
+            val phone = Math.toDegrees(kotlin.math.atan2(stepSin, stepCos))
+            val innovation = wrap180(course - phone - headingOffsetDeg)
+            val courseSigma = Math.toDegrees(kotlin.math.atan2(kotlin.math.sqrt(2.0) * sigmaM, d))
+            val k = headingOffsetSigmaDeg * headingOffsetSigmaDeg /
+                (headingOffsetSigmaDeg * headingOffsetSigmaDeg + courseSigma * courseSigma)
+            headingOffsetDeg = wrap180(headingOffsetDeg + k * innovation)
+            headingAligned = true
+            headingOffsetSigmaDeg = kotlin.math.sqrt((1 - k) * headingOffsetSigmaDeg * headingOffsetSigmaDeg)
+                .coerceAtLeast(MIN_HEADING_SIGMA_DEG)
+        }
+        alignAnchor = point; stepSin = 0.0; stepCos = 0.0; stepCount = 0
+    }
+
+    /** Смещение курса движения относительно курса телефона, градусы, и его σ. */
+    public val headingOffset: Pair<Double, Double> get() = headingOffsetDeg to headingOffsetSigmaDeg
+
     /** Оценка на момент [nowMillis] или null, если не было решений или погрешность выросла выше предела режима. */
     public fun estimate(nowMillis: Long): InertialEstimate? {
         if (!filter.isInitialized || mode == MotionMode.NONE) return null
         filter.predict(nowMillis)
         // Ошибки PDR и гироскопа коррелированы (смещение курса, масштаб шага): фильтр, считающий
         // отсчёты независимыми, их недооценивает, поэтому добавляем дрейф, пропорциональный пути.
-        val drift = DRIFT_PER_METER * distanceSinceFix
+        // Плюс ошибка курса: σ смещения курса и дрейф гироскопа без магнитометра.
+        val headingSigma = if (mode == MotionMode.WALK) Math.toRadians(headingOffsetSigmaDeg) else 0.0
+        val drift = kotlin.math.hypot(DRIFT_PER_METER * distanceSinceFix, distanceSinceFix * kotlin.math.sin(headingSigma.coerceAtMost(Math.PI / 2)))
         val sigma = kotlin.math.sqrt(filter.sigmaM * filter.sigmaM + drift * drift)
         if (sigma > maxSigma(mode)) return null
         val point = filter.point ?: return null
@@ -122,11 +183,22 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
     public fun reset() {
         orientation.reset(); zupt.reset(); steps.reset()
         lastImuNanos = null; lastStepNanos = null; lastFixMillis = null; distanceSinceFix = 0.0
+        gyroBias.fill(0.0); stillSamples = 0
+        headingOffsetDeg = 0.0; headingOffsetSigmaDeg = INITIAL_HEADING_SIGMA_DEG
+        alignAnchor = null; stepSin = 0.0; stepCos = 0.0; stepCount = 0
+        magSeen = false; headingAligned = false
         filter = NavigationFilter(accelNoise(mode))
     }
 
     private companion object {
         const val NANOS_PER_MILLI = 1_000_000L
+        const val GYRO_BIAS_GAIN = 0.01
+        const val INITIAL_HEADING_SIGMA_DEG = 30.0
+        const val MIN_HEADING_SIGMA_DEG = 3.0
+        const val NO_MAG_HEADING_SIGMA_DEG = 90.0
+        const val ALIGN_MIN_DISTANCE_M = 15.0
+        const val ALIGN_MIN_STEPS = 4
+        const val GYRO_CALIBRATED_SAMPLES = 200
         const val MAX_IMU_GAP_S = 0.5
         const val MIN_STEP_S = 0.3
         const val MAX_STEP_S = 1.5
@@ -152,5 +224,7 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
         }
     }
 }
+
+private fun wrap180(d: Double): Double = ((d + 540.0) % 360.0) - 180.0
 
 private fun normalizeDeg(d: Double): Double = ((d % 360.0) + 360.0) % 360.0

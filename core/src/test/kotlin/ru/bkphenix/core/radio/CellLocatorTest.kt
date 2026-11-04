@@ -6,16 +6,23 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import ru.bkphenix.core.Fixtures.T0
 import ru.bkphenix.core.Fixtures.TRUE_POINT
+import ru.bkphenix.core.geo.GeoPoint
+import java.util.Random
+import kotlin.math.log10
 
 class CellLocatorTest {
-    private fun cell(id: Long, rsrp: Int, serving: Boolean = false, ta: Int? = null) =
+    private fun cell(id: Long, rsrp: Int?, serving: Boolean = false, ta: Int? = null) =
         CellMeasurement(CellTechnology.LTE, 250, 1, 10, id, null, rsrp, ta, serving)
 
-    private val towers = mapOf(
-        1L to CellTowerRecord(CellTechnology.LTE, 250, 1, 10, 1, TRUE_POINT, 2_000.0),
-        2L to CellTowerRecord(CellTechnology.LTE, 250, 1, 10, 2, TRUE_POINT.offset(1_000.0, 90.0), 2_000.0),
-    )
-    private val db = CellTowerDatabase { m -> towers[m.cellId] }
+    private fun tower(id: Long, p: GeoPoint, range: Double = 2_000.0) = CellTowerRecord(CellTechnology.LTE, 250, 1, 10, id, p, range)
+
+    private fun dbOf(towers: List<CellTowerRecord>): CellTowerDatabase {
+        val byId = towers.associateBy { it.cellId }
+        return CellTowerDatabase { m -> byId[m.cellId] }
+    }
+
+    /** Мощность по той же модели, что в локаторе, с логнормальным разбросом [noiseDb]. */
+    private fun rsrp(d: Double, noiseDb: Double) = (-70.0 - 30.0 * log10(d / 100.0) + noiseDb).toInt()
 
     @Test
     fun `без вышек в базе позиции нет`() {
@@ -23,15 +30,58 @@ class CellLocatorTest {
     }
 
     @Test
-    fun `сильный сигнал смещает оценку к своей вышке`() {
-        val obs = CellLocator(db).locate(listOf(cell(1, -70), cell(2, -100)), T0)!!
-        assertTrue(obs.point.distanceTo(TRUE_POINT) < 50.0)
-        assertEquals(1_000.0, obs.accuracyM, 1.0)
+    fun `одна сота без мощности — позиция вышки с половиной радиуса`() {
+        val obs = CellLocator(dbOf(listOf(tower(1, TRUE_POINT, 3_000.0)))).locate(listOf(cell(1, null)), T0)!!
+        assertTrue(obs.point.distanceTo(TRUE_POINT) < 1.0)
+        assertTrue(obs.accuracyM in 1_000.0..1_600.0, "σ ${obs.accuracyM}")
     }
 
     @Test
-    fun `Timing Advance обслуживающей соты уточняет погрешность`() {
-        val obs = CellLocator(db).locate(listOf(cell(1, -70, serving = true, ta = 3)), T0)!!
-        assertEquals(3 * 78.12, obs.accuracyM, 0.01)
+    fun `трилатерация без шума находит точку и σ по TA меньше, чем по мощности`() {
+        val towers = listOf(0.0, 120.0, 240.0).mapIndexed { i, b -> tower(i + 1L, TRUE_POINT.offset(800.0, b)) }
+        val db = dbOf(towers)
+        val byPower = towers.map { cell(it.cellId, rsrp(800.0, 0.0)) }
+        val p = CellLocator(db).locate(byPower, T0)!!
+        assertTrue(p.point.distanceTo(TRUE_POINT) < 60.0, "ошибка ${p.point.distanceTo(TRUE_POINT)}")
+        val withTa = listOf(cell(1, rsrp(800.0, 0.0), serving = true, ta = 10)) + byPower.drop(1)
+        val t = CellLocator(db).locate(withTa, T0)!!
+        assertTrue(t.accuracyM < p.accuracyM, "TA ${t.accuracyM}, мощность ${p.accuracyM}")
+    }
+
+    @Test
+    fun `σ честная на случайных сценариях с шумом мощности и ошибкой положения вышек`() {
+        val rnd = Random(11)
+        var covered = 0
+        val errors = ArrayList<Double>()
+        val trials = 300
+        repeat(trials) { k ->
+            val n = 1 + rnd.nextInt(5)
+            val dist = List(n) { 200.0 + rnd.nextDouble() * 2_500.0 }
+            val truthTowers = List(n) { TRUE_POINT.offset(dist[it], rnd.nextDouble() * 360) }
+            // В базе — центр наблюдений, смещённый от антенны.
+            val towers = truthTowers.mapIndexed { i, p ->
+                tower(i + 1L, p.offset(kotlin.math.abs(rnd.nextGaussian()) * 200.0, rnd.nextDouble() * 360), 3_000.0)
+            }
+            val nearest = dist.indices.minBy { dist[it] }
+            val meas = towers.indices.map { i ->
+                val serving = i == nearest && k % 2 == 0
+                cell(i + 1L, rsrp(dist[i], rnd.nextGaussian() * 8.0), serving, if (serving) (dist[i] / 78.12).toInt() else null)
+            }
+            val obs = CellLocator(dbOf(towers)).locate(meas, T0)!!
+            val err = obs.point.distanceTo(TRUE_POINT)
+            errors += err
+            if (err <= 2.5 * obs.accuracyM) covered++
+        }
+        val coverage = covered.toDouble() / trials
+        assertTrue(coverage >= 0.9, "покрытие 2.5σ: $coverage")
+        assertTrue(errors.sorted()[trials / 2] < 1_000.0, "медиана ошибки ${errors.sorted()[trials / 2]}")
+    }
+
+    @Test
+    fun `дальность по TA — середина шага`() {
+        val (r, s) = CellLocator.taRange(CellTechnology.LTE, 3)!!
+        assertEquals(3.5 * 78.12, r, 0.01)
+        assertTrue(s in 60.0..70.0)
+        assertNull(CellLocator.taRange(CellTechnology.NR, 3))
     }
 }

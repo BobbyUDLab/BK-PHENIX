@@ -38,6 +38,7 @@ private const val MAX_ROWS = 15
 fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val log by viewModel.logState.collectAsStateWithLifecycle()
+    val rinex by viewModel.rinexInfo.collectAsStateWithLifecycle()
     val context = LocalContext.current
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -64,6 +65,17 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
                     TextButton(onClick = viewModel::deleteLogs, enabled = !log.recording && log.files.isNotEmpty()) {
                         Text("Удалить")
                     }
+                }
+            }
+        }
+        item {
+            SectionCard("Запасные эфемериды (RINEX)") {
+                val r = rinex
+                if (r == null) {
+                    EmptyHint("Не загружены: нужна сеть. Используются, если чип не отдаёт навигационные сообщения")
+                } else {
+                    InfoRow("Спутников GPS", "${r.satellites} (записей ${r.records})")
+                    InfoRow("Файл", "${formatUtc(r.fileTimeMillis)} · ${r.origin}")
                 }
             }
         }
@@ -162,3 +174,7 @@ private fun shareLogs(context: Context, files: List<File>) {
     }
     context.startActivity(Intent.createChooser(intent, "Логи BK-PHENIX"))
 }
+
+private fun formatUtc(millis: Long): String =
+    java.time.format.DateTimeFormatter.ofPattern("dd.MM HH:mm 'UTC'", Locale.ROOT)
+        .format(java.time.Instant.ofEpochMilli(millis).atOffset(java.time.ZoneOffset.UTC))

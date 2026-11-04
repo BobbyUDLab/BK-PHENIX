@@ -4,6 +4,8 @@
 
     <!-- Только AOSP API: без Google Play Services (целевые устройства Huawei/Honor). -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Загрузка запасных broadcast-эфемерид RINEX для чипов без навигационных сообщений. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />

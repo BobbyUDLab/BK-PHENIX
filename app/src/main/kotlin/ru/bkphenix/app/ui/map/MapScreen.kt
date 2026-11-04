@@ -45,6 +45,7 @@ import org.maplibre.android.maps.Style
 import ru.bkphenix.app.R
 import ru.bkphenix.app.data.map.MapFileState
 import ru.bkphenix.app.ui.components.fmt
+import ru.bkphenix.core.geo.ErrorCircle
 import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.track.MotionMode
 import java.io.File
@@ -171,7 +172,8 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
                 Text(
                     when {
                         h == null -> stringResource(R.string.map_no_position)
-                        else -> stringResource(R.string.map_status, h.accuracyM.fmt(0), (h.speedMps * 3.6).fmt(0)) +
+                        else -> stringResource(R.string.map_status, ErrorCircle.radius(h.accuracyM).fmt(0), (h.speedMps * 3.6).fmt(0)) +
+                            (solution?.gnss?.raim?.horizontalProtectionLevelM?.let { " · " + stringResource(R.string.map_hpl, it.fmt(0)) } ?: "") +
                             (if (h.extrapolated) " · " + stringResource(R.string.map_held) else "")
                     },
                     style = MaterialTheme.typography.bodySmall,

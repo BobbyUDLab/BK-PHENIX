@@ -50,7 +50,14 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
     private var stationary = false
     private var distanceSinceFix = 0.0
 
-    public val headingDeg: Double get() = orientation.headingDeg
+    /**
+     * Магнитное склонение, градусы (восток положителен): истинный курс = магнитный + склонение.
+     * Задаётся по позиции из модели WMM (на Android — GeomagneticField); 0 — курс остаётся магнитным.
+     */
+    public var declinationDeg: Double = 0.0
+
+    /** Истинный курс оси y телефона, градусы от севера. */
+    public val headingDeg: Double get() = normalizeDeg(orientation.headingDeg + declinationDeg)
 
     public fun onImu(s: ImuSample) {
         val prev = lastImuNanos
@@ -72,7 +79,7 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
             MotionMode.WALK -> steps.update(s.timeNanos, s.accel)?.let { step ->
                 val period = lastStepNanos?.let { (step.timeNanos - it) / 1e9 }?.coerceIn(MIN_STEP_S, MAX_STEP_S) ?: TYPICAL_STEP_S
                 lastStepNanos = step.timeNanos
-                filter.updateVelocity(step.lengthM / period, orientation.headingDeg, PDR_SPEED_SIGMA)
+                filter.updateVelocity(step.lengthM / period, headingDeg, PDR_SPEED_SIGMA)
             }
             MotionMode.CAR -> {
                 filter.rotateVelocity(orientation.verticalRate(s.gyro) * dt)
@@ -145,3 +152,5 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
         }
     }
 }
+
+private fun normalizeDeg(d: Double): Double = ((d % 360.0) + 360.0) % 360.0

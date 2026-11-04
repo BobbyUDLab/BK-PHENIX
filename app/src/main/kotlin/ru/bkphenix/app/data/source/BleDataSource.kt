@@ -23,7 +23,12 @@ import java.util.concurrent.ConcurrentHashMap
 class BleDataSource(private val context: Context) : DataSource("Bluetooth/BLE") {
 
     @SuppressLint("MissingPermission")
-    fun beacons(publishIntervalMillis: Long = 2_000, maxAgeMillis: Long = 10_000): Flow<List<BleSnapshot>> =
+    fun beacons(
+        publishIntervalMillis: Long = 2_000,
+        maxAgeMillis: Long = 90_000,
+        scanWindowMillis: Long = 8_000,
+        scanPeriodMillis: Long = 60_000,
+    ): Flow<List<BleSnapshot>> =
         callbackFlow {
             if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
                 setStatus(SourceStatus.Unsupported("BLE не поддерживается"))
@@ -55,8 +60,21 @@ class BleDataSource(private val context: Context) : DataSource("Bluetooth/BLE") 
                     setStatus(SourceStatus.Unavailable("Ошибка сканирования BLE, код $errorCode"))
                 }
             }
-            val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).build()
-            guarded("startScan") { scanner.startScan(null, settings, callback) }?.let { setStatus(SourceStatus.Active) }
+            // Короткие окна вместо постоянного скана: Huawei/EMUI предупреждает о «постоянном поиске
+            // Bluetooth-устройств в фоне» и может убить процесс. 8 с из каждых 60 с, режим LOW_POWER.
+            val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_POWER).build()
+            val scanning = java.util.concurrent.atomic.AtomicBoolean(false)
+            val dutyCycle = launch {
+                while (true) {
+                    if (guarded("startScan") { scanner.startScan(null, settings, callback) } != null) {
+                        scanning.set(true)
+                        setStatus(SourceStatus.Active)
+                    }
+                    delay(scanWindowMillis)
+                    if (scanning.getAndSet(false)) guarded("stopScan") { scanner.stopScan(callback) }
+                    delay((scanPeriodMillis - scanWindowMillis).coerceAtLeast(0))
+                }
+            }
             val publisher = launch {
                 while (true) {
                     delay(publishIntervalMillis)
@@ -67,7 +85,8 @@ class BleDataSource(private val context: Context) : DataSource("Bluetooth/BLE") 
             }
             awaitClose {
                 publisher.cancel()
-                guarded("stopScan") { scanner.stopScan(callback) }
+                dutyCycle.cancel()
+                if (scanning.getAndSet(false)) guarded("stopScan") { scanner.stopScan(callback) }
             }
         }
 }

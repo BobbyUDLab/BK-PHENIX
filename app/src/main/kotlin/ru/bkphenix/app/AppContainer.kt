@@ -19,6 +19,7 @@ import ru.bkphenix.app.data.track.TrackDatabase
 import ru.bkphenix.app.data.track.TrackRecorder
 import ru.bkphenix.app.ui.theme.ThemePreferences
 import ru.bkphenix.app.data.roads.RoadGraphStore
+import ru.bkphenix.app.data.terrain.TerrainStore
 import java.io.File
 
 /** Ручное внедрение зависимостей: один репозиторий на процесс. */
@@ -37,6 +38,7 @@ class AppContainer(context: Context) {
             rinex = RinexEphemerisSource(File(app.filesDir, "ephemeris")),
             cellTowers = AssetCellTowerDatabase(app),
             roads = roadGraphs,
+            terrain = terrainFiles,
             logRecorder = RawLogRecorder(File(app.filesDir, "logs")) {
                 GnssLoggerFormat.header(
                     appVersion = BuildConfig.VERSION_NAME,
@@ -55,6 +57,8 @@ class AppContainer(context: Context) {
     val mapFiles: MapFileStore by lazy { MapFileStore(app) }
 
     val roadGraphs: RoadGraphStore by lazy { RoadGraphStore(app) }
+
+    val terrainFiles: TerrainStore by lazy { TerrainStore(app) }
 
     val themePreferences: ThemePreferences by lazy { ThemePreferences(app) }
 }

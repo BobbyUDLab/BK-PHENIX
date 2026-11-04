@@ -29,6 +29,8 @@ data class RawLocation(
     val timeMillis: Long,
     val elapsedRealtimeNanos: Long,
     val isMock: Boolean,
+    /** σ высоты (verticalAccuracyMeters, 68 %), метры. */
+    val verticalAccuracyM: Float? = null,
 )
 
 /** Агрегированная сводка по сырым измерениям ГНСС одной эпохи. */

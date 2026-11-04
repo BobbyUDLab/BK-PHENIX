@@ -27,6 +27,11 @@ object PhenixLogRecords {
             "state" to solution.anchor.state.name,
             "deviationM" to solution.anchor.deviationM,
             "allowedDeviationM" to solution.anchor.allowedDeviationM,
+            "freshness" to solution.anchor.freshness?.name,
+            "freshnessReason" to solution.anchor.freshnessReason,
+            "ageS" to solution.anchor.ageSeconds,
+            "traveledM" to solution.anchor.traveledM,
+            "sigmaM" to solution.anchor.propagatedSigmaM,
         ),
         // Наблюдения источников до сравнения (включая счисление) — для повторного прогона счисления и NEES.
         "observations" to observations.map {

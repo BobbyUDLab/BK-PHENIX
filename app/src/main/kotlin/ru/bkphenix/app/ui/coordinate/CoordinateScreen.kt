@@ -85,7 +85,7 @@ fun CoordinateScreen(viewModel: CoordinateViewModel, locationGranted: Boolean, o
             }
             anchor?.message?.let { EmptyHint(it) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { viewModel.anchorFromCurrent() }, enabled = solution?.comparison?.estimate != null) {
+                Button(onClick = { viewModel.anchorFromCurrent() }, enabled = solution?.comparison?.let { it.estimate != null || it.accepted.isNotEmpty() || it.rejected.isNotEmpty() } == true) {
                     Text(stringResource(R.string.action_anchor_here))
                 }
                 OutlinedButton(onClick = { showDialog = true }) { Text(stringResource(R.string.action_anchor_manual)) }

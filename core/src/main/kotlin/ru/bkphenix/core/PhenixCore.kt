@@ -26,6 +26,7 @@ import kotlin.math.sqrt
 import ru.bkphenix.core.integrity.NavigationWord
 import ru.bkphenix.core.model.PositionObservation
 import ru.bkphenix.core.model.PositionSource
+import ru.bkphenix.core.model.SourceGroup
 import ru.bkphenix.core.model.TimeObservation
 
 /** Итоговое решение одной эпохи. */

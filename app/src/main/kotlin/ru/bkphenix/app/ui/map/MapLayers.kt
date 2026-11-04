@@ -17,6 +17,7 @@ import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
 import org.maplibre.geojson.Polygon
 import ru.bkphenix.core.PhenixSolution
+import ru.bkphenix.core.geo.ErrorCircle
 import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.model.PositionSource
 import ru.bkphenix.core.track.HeldPosition
@@ -62,6 +63,15 @@ internal object MapLayers {
                 ),
             )
         }
+        // HPL — пунктирная окружность вокруг позиции, отдельно от круга ошибки 95 %.
+        style.addLayer(
+            LineLayer("$POSITION-hpl", POSITION).withFilter(Expression.eq(Expression.geometryType(), "LineString")).withProperties(
+                PropertyFactory.lineColor(Expression.toColor(Expression.get("color"))),
+                PropertyFactory.lineWidth(2f),
+                PropertyFactory.lineDasharray(arrayOf(2f, 2f)),
+                PropertyFactory.lineOpacity(0.9f),
+            ),
+        )
         style.addLayer(
             SymbolLayer("$SOURCES-label", SOURCES).withFilter(Expression.eq(Expression.geometryType(), "Point")).withProperties(
                 PropertyFactory.textField(Expression.get("label")),
@@ -94,7 +104,9 @@ internal object MapLayers {
         style.getSourceAs<GeoJsonSource>(POSITION)?.setGeoJson(
             FeatureCollection.fromFeatures(
                 held?.let {
-                    marker(it.point, it.accuracyM, if (it.extrapolated) HELD_COLOR else POSITION_COLOR, null, 0.2, 9.0)
+                    val color = if (it.extrapolated) HELD_COLOR else POSITION_COLOR
+                    val hpl = solution?.gnss?.raim?.horizontalProtectionLevelM?.takeIf { !held.extrapolated }
+                    marker(it.point, it.accuracyM, color, null, 0.2, 9.0) + listOfNotNull(hpl?.let { r -> ring(it.point, r, color) })
                 }.orEmpty(),
             ),
         )
@@ -106,13 +118,19 @@ internal object MapLayers {
             addNumberProperty("radius", radius)
             label?.let { addStringProperty("label", it) }
         }
-        val ring = (0..CIRCLE_STEPS).map { i -> p.offset(accuracyM, 360.0 * i / CIRCLE_STEPS).toPoint() }
+        val r95 = ErrorCircle.radius(accuracyM)
+        val ring = (0..CIRCLE_STEPS).map { i -> p.offset(r95, 360.0 * i / CIRCLE_STEPS).toPoint() }
         val area = Feature.fromGeometry(Polygon.fromLngLats(listOf(ring))).apply {
             addStringProperty("color", color)
             addNumberProperty("opacity", opacity)
         }
         return listOf(area, dot)
     }
+
+    private fun ring(p: GeoPoint, radiusM: Double, color: String): Feature =
+        Feature.fromGeometry(LineString.fromLngLats((0..CIRCLE_STEPS).map { i -> p.offset(radiusM, 360.0 * i / CIRCLE_STEPS).toPoint() })).apply {
+            addStringProperty("color", color)
+        }
 
     private fun GeoPoint.toPoint(): Point = Point.fromLngLat(longitude, latitude)
 

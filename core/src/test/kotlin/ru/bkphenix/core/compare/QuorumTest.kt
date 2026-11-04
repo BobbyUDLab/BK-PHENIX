@@ -41,6 +41,7 @@ class QuorumTest {
 
 class AnchorPriorityTest {
     private val p = ru.bkphenix.core.geo.GeoPoint(55.75, 37.62)
+    private fun o(src: PositionSource, east: Double, acc: Double) = PositionObservation(src, p.offset(east, 90.0), acc, 0)
 
     @Test
     fun `якорь решает спор — согласованная подмена GNSS и сети отсекается`() {
@@ -61,5 +62,36 @@ class AnchorPriorityTest {
         val sol = core.solve(listOf(PositionObservation(PositionSource.GNSS, p.offset(5.0, 0.0), 5.0, 1_000)), 1_000)
         assertTrue(sol.comparison.hasQuorum)
         assertEquals(IntegrityState.OK, sol.integrity.state)
+    }
+
+    @Test
+    fun `Fused и счисление от фикса GNSS не дают кворума GNSS`() {
+        val dr = PositionObservation(PositionSource.DEAD_RECKONING, p.offset(805.0, 90.0), 20.0, 0, gnssDerived = true)
+        val sol = PhenixCore().solve(listOf(o(PositionSource.GNSS, 800.0, 5.0), o(PositionSource.FUSED, 802.0, 10.0), dr), 0)
+        assertEquals(1, sol.comparison.strongConfirmations)
+        assertFalse(sol.comparison.hasQuorum)
+        assertEquals(IntegrityState.SUSPICIOUS, sol.integrity.state)
+    }
+
+    @Test
+    fun `счисление с независимой привязкой — самостоятельный голос`() {
+        val dr = PositionObservation(PositionSource.DEAD_RECKONING, p.offset(5.0, 90.0), 20.0, 0, gnssDerived = false)
+        val sol = PhenixCore().solve(listOf(o(PositionSource.GNSS, 0.0, 5.0), dr), 0)
+        assertTrue(sol.comparison.hasQuorum)
+    }
+
+    @Test
+    fun `согласованная подмена GNSS, сети и счисления не перевешивает две независимые группы`() {
+        // Подмена: GNSS, сеть, Fused и счисление от фикса GNSS вместе в 800 м (4 источника, 1 сильный голос).
+        val spoof = listOf(
+            o(PositionSource.GNSS, 800.0, 5.0),
+            o(PositionSource.NETWORK, 810.0, 30.0),
+            PositionObservation(PositionSource.DEAD_RECKONING, p.offset(795.0, 90.0), 20.0, 0, gnssDerived = true),
+        )
+        // Правда: собственные соты и Bluetooth-маяк (2 сильных голоса).
+        val honest = listOf(o(PositionSource.CELL, 30.0, 150.0), o(PositionSource.BLUETOOTH, 0.0, 15.0))
+        val r = PositionComparator().compare(spoof + honest)
+        assertTrue(r.accepted.none { it.source == PositionSource.GNSS }, "подмена выиграла: ${r.accepted}")
+        assertEquals(2, r.strongConfirmations)
     }
 }

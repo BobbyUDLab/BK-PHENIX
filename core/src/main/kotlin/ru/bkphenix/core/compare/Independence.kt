@@ -32,5 +32,9 @@ public object Independence {
             .sortedBy { it.groups.minOf { g -> g.ordinal } }
     }
 
+    /** Число сильных голосов: в голосе есть хотя бы одно самостоятельное свидетельство. */
+    public fun strongCount(votes: List<IndependentVote>): Int =
+        votes.count { v -> v.observations.any { it.isIndependentEvidence } }
+
     public fun count(observations: List<PositionObservation>): Int = votes(observations).size
 }

@@ -29,6 +29,7 @@ import ru.bkphenix.app.ui.components.SectionCard
 import ru.bkphenix.app.ui.components.fmt
 import ru.bkphenix.app.ui.components.label
 import ru.bkphenix.app.ui.components.yesNo
+import ru.bkphenix.app.ui.theme.ThemeCard
 import java.io.File
 import java.util.Locale
 
@@ -44,6 +45,7 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item { ThemeCard() }
         item {
             SectionCard("О приложении") {
                 InfoRow("Версия", "${BuildConfig.VERSION_NAME} (сборка ${BuildConfig.VERSION_CODE}, ${BuildConfig.BUILD_TYPE})")

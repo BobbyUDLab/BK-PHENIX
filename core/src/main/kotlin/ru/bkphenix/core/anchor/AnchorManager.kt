@@ -3,6 +3,7 @@ package ru.bkphenix.core.anchor
 import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.model.PositionObservation
 import ru.bkphenix.core.model.PositionSource
+import ru.bkphenix.core.track.MotionMode
 import kotlin.math.sqrt
 
 /** Состояние якоря пользователя. */
@@ -26,7 +27,10 @@ public data class Anchor(
     val accuracyM: Double,
     val timestampMillis: Long,
     val mode: AnchorMode = AnchorMode.MANUAL,
+    /** Для автоякоря: по каким источникам он поставлен. */
+    val basis: String? = null,
 ) {
+    val isAuto: Boolean get() = mode == AnchorMode.AUTOMATIC
     init {
         require(accuracyM > 0.0) { "Погрешность якоря должна быть положительной" }
     }
@@ -57,6 +61,10 @@ public data class AnchorEvaluation(
     val traveledM: Double? = null,
     /** Почему якорь можно или нужно обновить. */
     val freshnessReason: String? = null,
+    /** Последний якорь, поставленный человеком (сохраняется при автопродлении). */
+    val lastHumanAnchor: Anchor? = null,
+    /** Сколько раз якорь продлён автоматически с последнего ручного. */
+    val autoRenewals: Int = 0,
 )
 
 /**
@@ -72,8 +80,22 @@ public data class AnchorEvaluation(
  */
 public class AnchorManager(
     private val gateSigma: Double = 3.0,
-    private val maxSpeedMps: Double = WALK_MAX_SPEED_MPS,
+    private var maxSpeedMps: Double = WALK_MAX_SPEED_MPS,
 ) {
+    /**
+     * Режим движения. В «Авто» якорь продлевается сам (автоякорь) на остановках и при доверенных позициях;
+     * первый якорь всегда ставит человек. В «Пешком» — только ручной якорь и строгие правила.
+     */
+    public var motionMode: MotionMode = MotionMode.WALK
+        set(value) {
+            field = value
+            maxSpeedMps = if (value == MotionMode.CAR) CAR_MAX_SPEED_MPS else WALK_MAX_SPEED_MPS
+        }
+    public var lastHumanAnchor: Anchor? = null
+        private set
+    private var autoRenewals = 0
+    private var trustedStreak = 0
+    private val recent = ArrayDeque<Pair<Long, GeoPoint>>()
     public var anchor: Anchor? = null
         private set
     private var point: GeoPoint? = null
@@ -85,6 +107,8 @@ public class AnchorManager(
     private var conflictWithQuorum = false
 
     public fun setAnchor(anchor: Anchor) {
+        if (!anchor.isAuto) { lastHumanAnchor = anchor; autoRenewals = 0 } else autoRenewals++
+        trustedStreak = 0
         this.anchor = anchor
         point = anchor.point
         unknownMotionM = 0.0
@@ -122,6 +146,45 @@ public class AnchorManager(
         anchor = null
         point = null
         last = null
+        lastHumanAnchor = null
+        autoRenewals = 0
+    }
+
+    /** Стоим: за последние [STOP_WINDOW_MS] смещение решения меньше [STOP_RADIUS_M]. */
+    private fun stationary(nowMillis: Long): Boolean {
+        val first = recent.firstOrNull() ?: return false
+        if (nowMillis - first.first < STOP_WINDOW_MS * 0.8) return false
+        return recent.all { it.second.distanceTo(recent.last().second) < STOP_RADIUS_M }
+    }
+
+    /**
+     * Автоякорь (только «Авто», только после ручного): на остановке при согласии источников или после
+     * [TRUSTED_EPOCHS] эпох подряд доверенных позиций (кворум, малая σ). При подозрении на подмену — никогда:
+     * автоякорь не может подтвердить сам себя.
+     */
+    private fun maybeAutoRenew(
+        estimate: GeoPoint?, sigma: Double?, nowMillis: Long, quorum: Boolean, spoofSuspected: Boolean, agreeing: String?,
+    ) {
+        if (motionMode != MotionMode.CAR || lastHumanAnchor == null) return
+        if (estimate == null || sigma == null || spoofSuspected) { trustedStreak = 0; return }
+        recent.addLast(nowMillis to estimate)
+        while (recent.isNotEmpty() && nowMillis - recent.first().first > STOP_WINDOW_MS) recent.removeFirst()
+        val good = sigma <= AUTO_MAX_SIGMA_M && last?.state != AnchorState.ANCHOR_CONFLICT
+        trustedStreak = if (good && quorum) trustedStreak + 1 else 0
+        val a = anchor ?: return
+        val age = nowMillis - a.timestampMillis
+        val stop = good && stationary(nowMillis)
+        val due = age >= AUTO_MIN_INTERVAL_MS || last?.freshness != AnchorFreshness.ACTUAL
+        if (!due) return
+        val reason = when {
+            stop -> "остановка"
+            trustedStreak >= TRUSTED_EPOCHS -> "доверенные позиции"
+            else -> return
+        }
+        setAnchor(
+            Anchor(estimate, (sigma * AUTO_SIGMA_FACTOR).coerceAtLeast(AUTO_MIN_ACCURACY_M), nowMillis, AnchorMode.AUTOMATIC,
+                "$reason; ${agreeing ?: "источники"}"),
+        )
     }
 
     /** @param sourcesHaveQuorum решение без якоря подтверждено кворумом независимых источников. */
@@ -130,6 +193,19 @@ public class AnchorManager(
         estimateAccuracyM: Double?,
         nowMillis: Long,
         sourcesHaveQuorum: Boolean = false,
+        spoofSuspected: Boolean = false,
+        agreeingSources: String? = null,
+    ): AnchorEvaluation {
+        maybeAutoRenew(estimate, estimateAccuracyM, nowMillis, sourcesHaveQuorum, spoofSuspected, agreeingSources)
+        return evaluateInner(estimate, estimateAccuracyM, nowMillis, sourcesHaveQuorum)
+            .copy(lastHumanAnchor = lastHumanAnchor, autoRenewals = autoRenewals).also { last = it }
+    }
+
+    private fun evaluateInner(
+        estimate: GeoPoint?,
+        estimateAccuracyM: Double?,
+        nowMillis: Long,
+        sourcesHaveQuorum: Boolean,
     ): AnchorEvaluation {
         val a = anchor ?: return AnchorEvaluation(
             AnchorState.NO_ANCHOR, null, null, null,
@@ -198,5 +274,13 @@ public class AnchorManager(
         public const val MUST_UPDATE_AGE_S: Double = 2 * 3600.0
         /** Эпох подряд конфликта с кворумом источников, после которых якорь теряет приоритет. */
         public const val CONFLICT_EPOCHS: Int = 10
+        public const val STOP_WINDOW_MS: Long = 10_000
+        public const val STOP_RADIUS_M: Double = 5.0
+        public const val TRUSTED_EPOCHS: Int = 30
+        public const val AUTO_MIN_INTERVAL_MS: Long = 2 * 60_000
+        public const val AUTO_MAX_SIGMA_M: Double = 15.0
+        /** Автоякорь весит меньше ручного: σ решения ×2, не меньше 10 м. */
+        public const val AUTO_SIGMA_FACTOR: Double = 2.0
+        public const val AUTO_MIN_ACCURACY_M: Double = 10.0
     }
 }

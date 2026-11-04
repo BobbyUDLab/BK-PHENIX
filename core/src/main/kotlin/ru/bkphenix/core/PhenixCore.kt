@@ -6,10 +6,13 @@ import ru.bkphenix.core.anchor.AnchorState
 import ru.bkphenix.core.compare.ComparisonResult
 import ru.bkphenix.core.compare.PositionComparator
 import ru.bkphenix.core.geo.GeoPoint
+import ru.bkphenix.core.gnss.DetectorKind
+import ru.bkphenix.core.gnss.DetectorVerdict
 import ru.bkphenix.core.gnss.GnssIntegrityProcessor
 import ru.bkphenix.core.gnss.GnssIntegrityResult
 import ru.bkphenix.core.gnss.NavigationSubframe
 import ru.bkphenix.core.gnss.RawGnssEpoch
+import ru.bkphenix.core.integrity.AlarmFilter
 import ru.bkphenix.core.integrity.CompositeIntegrityEngine
 import ru.bkphenix.core.integrity.ConsistencyIntegrityEngine
 import ru.bkphenix.core.integrity.ContinuityMonitor
@@ -48,6 +51,7 @@ public class PhenixCore(
     public val anchorManager: AnchorManager = AnchorManager(),
     public val gnssProcessor: GnssIntegrityProcessor = GnssIntegrityProcessor(),
     public val continuity: ContinuityMonitor = ContinuityMonitor(),
+    private val alarmFilter: AlarmFilter = AlarmFilter(),
 ) {
     public fun solve(
         observations: List<PositionObservation>,
@@ -75,7 +79,13 @@ public class PhenixCore(
         var integrity = integrityEngine.evaluate(
             IntegrityContext(observations, comparison, words, timeForEngine),
         )
-        if (gnss != null) integrity = IntegrityReport.merge(listOf(integrity, gnss.report))
+        // Тревоги по сырым данным (RAIM, детекторы) — через гистерезис: у домов одиночные эпохи FAULT обычны.
+        // Расхождение с NITZ на секунды — сильный признак, без задержки.
+        if (gnss != null) {
+            val filtered = alarmFilter.filter(gnss.report)
+            val nitz = gnss.detectors.any { it.kind == DetectorKind.NITZ_TIME && it.verdict == DetectorVerdict.ALERT }
+            integrity = IntegrityReport.merge(listOf(integrity, if (nitz) gnss.report else filtered))
+        }
         integrity = IntegrityReport.merge(listOf(integrity, continuityResult.report))
         val anchor = anchorManager.evaluate(unanchored.estimate, unanchored.accuracyM, nowMillis)
         if (anchor.state == AnchorState.ANCHOR_CONFLICT) {

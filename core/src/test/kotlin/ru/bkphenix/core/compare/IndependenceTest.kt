@@ -20,14 +20,15 @@ class IndependenceTest {
     }
 
     @Test
-    fun `сеть связывает вышки и Wi-Fi в один голос`() {
+    fun `сеть платформы не склеивает собственные соты и Wi-Fi`() {
         val list = listOf(
             obs(PositionSource.CELL, TRUE_POINT, 300.0),
             obs(PositionSource.WIFI_RSSI, TRUE_POINT, 30.0),
             obs(PositionSource.NETWORK, TRUE_POINT, 40.0),
             obs(PositionSource.GNSS, TRUE_POINT, 5.0),
         )
-        assertEquals(2, Independence.count(list))
+        // «Сеть» — повторитель GNSS: присоединяется к голосу сот, но не сливает соты с Wi-Fi.
+        assertEquals(3, Independence.count(list))
         assertEquals(3, Independence.count(list.filterNot { it.source == PositionSource.NETWORK }))
     }
 

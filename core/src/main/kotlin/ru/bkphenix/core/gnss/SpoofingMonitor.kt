@@ -111,9 +111,14 @@ public class SpoofingMonitor(private val t: SpoofingThresholds = SpoofingThresho
             val l5 = list.firstOrNull { it.measurement.band == GnssBand.L5 } ?: return@mapNotNull null
             l5.rangeM - l1.rangeM
         }
-        if (diffs.size < 2) return na(DetectorKind.DUAL_FREQUENCY, "Двухчастотных спутников: ${diffs.size}")
+        if (diffs.size < 4) return na(DetectorKind.DUAL_FREQUENCY, "Двухчастотных спутников: ${diffs.size}")
         val bad = diffs.count { it !in t.dualFrequencyRangeM }
-        val spread = diffs.max() - diffs.min()
+        // Одиночный выброс (неоднозначность кода L5, многолучёвость) — сбой измерения, а не подмена:
+        // разброс считается по парам в допуске, при ≥ 5 парах без крайних значений.
+        // Журнал 2026-11-04: 201 ложная эпоха из-за одной пары с разностью ~20 км.
+        val inliers = diffs.filter { it in t.dualFrequencyRangeM }.sorted()
+            .let { if (it.size >= 5) it.subList(1, it.size - 1) else it }
+        val spread = if (inliers.size >= 2) inliers.last() - inliers.first() else 0.0
         val detail = "Пар L1/L5: ${diffs.size}, вне допуска: $bad, разброс %.1f м".format(spread)
         return if (bad * 2 > diffs.size || spread > t.maxDualFrequencySpreadM) alert(DetectorKind.DUAL_FREQUENCY, detail) else pass(DetectorKind.DUAL_FREQUENCY, detail)
     }

@@ -407,7 +407,12 @@ class PhenixRepository(
         const val EPOCH_MILLIS = 1_000L
         const val STATUS_STALE_MILLIS = 5_000L
         const val GPS_FRESH_MILLIS = 3_000L
-        const val RINEX_REFRESH_MILLIS = 2 * 3600_000L
+        /**
+         * Файл BKG дополняется каждые 15 мин, а эфемериды ГЛОНАСС действуют ±15 мин от tb:
+         * при обновлении раз в 2 ч ГЛОНАСС выпадал из решения через полчаса после загрузки
+         * (журнал 2026-11-04: 1625 вместо 5520 спутнико-эпох). ~0,5 МБ за загрузку.
+         */
+        const val RINEX_REFRESH_MILLIS = 20 * 60_000L
         const val RINEX_RETRY_MILLIS = 10 * 60_000L
         const val GNSS_TIME_UNCERTAINTY_MS = 1_000L
         const val DECLINATION_REFRESH_M = 10_000.0

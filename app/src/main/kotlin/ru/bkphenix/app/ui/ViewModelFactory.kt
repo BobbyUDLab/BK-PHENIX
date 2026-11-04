@@ -7,6 +7,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import ru.bkphenix.app.PhenixApplication
 import ru.bkphenix.app.ui.coordinate.CoordinateViewModel
 import ru.bkphenix.app.ui.diagnostics.DiagnosticsViewModel
+import ru.bkphenix.app.ui.map.MapViewModel
 import ru.bkphenix.app.ui.satellites.SatellitesViewModel
 import ru.bkphenix.app.ui.track.TrackViewModel
 
@@ -16,6 +17,7 @@ object ViewModelFactory {
         initializer { SatellitesViewModel(repository()) }
         initializer { DiagnosticsViewModel(repository()) }
         initializer { TrackViewModel(container().trackRecorder) }
+        initializer { container().let { MapViewModel(it.repository, it.trackRecorder, it.mapFiles) } }
     }
 
     private fun androidx.lifecycle.viewmodel.CreationExtras.container() =

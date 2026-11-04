@@ -206,8 +206,8 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
     /** Согласие GNSS хотя бы с одним независимым источником (без них проверять не с чем — да). */
     /**
      * Перезапуск после перерыва допустим, только если новая точка GNSS достижима от последней принятой
-     * (макс. скорость × перерыв + 3σ) и не противоречит ни одному другому источнику (сеть, соты, Wi-Fi, счисление,
-     * якорь). Сеть здесь годится как свидетель против: она может опираться на GNSS, но не на поддельную.
+     * (макс. скорость × перерыв + 3σ) и не противоречит свежим независимым источникам
+     * (например, соте, Wi-Fi, счислению без GNSS или пользовательскому якорю).
      */
     private fun implausibleAfterGap(gnss: PositionObservation, observations: List<PositionObservation>, nowMillis: Long): String? {
         val o = origin ?: return null

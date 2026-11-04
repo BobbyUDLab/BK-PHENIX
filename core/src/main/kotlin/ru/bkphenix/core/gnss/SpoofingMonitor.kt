@@ -67,6 +67,7 @@ public data class SpoofingThresholds(
 public class SpoofingMonitor(private val t: SpoofingThresholds = SpoofingThresholds()) {
     private var previousClock: RawGnssClock? = null
     private var previousRateNsPerS: Double? = null
+    private var previousOwnClockM: Double? = null
     private var agcBaseline: Double? = null
     private var cn0Baseline: Double? = null
     private var baselineEpochs = 0
@@ -84,6 +85,7 @@ public class SpoofingMonitor(private val t: SpoofingThresholds = SpoofingThresho
     public fun reset() {
         previousClock = null
         previousRateNsPerS = null
+        previousOwnClockM = null
         agcBaseline = null
         cn0Baseline = null
         baselineEpochs = 0
@@ -129,6 +131,9 @@ public class SpoofingMonitor(private val t: SpoofingThresholds = SpoofingThresho
         val fullBias = clock?.fullBiasNanos ?: return na(DetectorKind.CLOCK_JUMP, "Нет оценки времени GPS")
         val prev = previousClock
         previousClock = clock
+        val ownClockM = input.ownSolution?.clockBiasM
+        val prevOwnClockM = previousOwnClockM
+        previousOwnClockM = ownClockM
         val prevFull = prev?.fullBiasNanos
         if (prev == null || prevFull == null || prev.hardwareClockDiscontinuityCount != clock.hardwareClockDiscontinuityCount) {
             previousRateNsPerS = null
@@ -145,7 +150,22 @@ public class SpoofingMonitor(private val t: SpoofingThresholds = SpoofingThresho
         previousRateNsPerS = rate
         val jump = abs(deltaBias - expectedRate * dtS)
         val detail = "Отклонение от дрейфа %.0f нс за %.1f с".format(jump, dtS)
-        return if (jump > t.clockJumpNanos) alert(DetectorKind.CLOCK_JUMP, detail) else pass(DetectorKind.CLOCK_JUMP, detail)
+        if (jump <= t.clockJumpNanos) return pass(DetectorKind.CLOCK_JUMP, detail)
+        // Kirin переоценивает FullBiasNanos скачками 4–80 мс без счётчика разрыва. Подмена времени даёт скачок
+        // при согласованных псевдодальностях; сбой чипа — несогласованные (RAIM без решения) или скачок,
+        // поглощённый смещением часов в МНК. Отличаем по полной оценке смещения: FullBias + Bias + b_МНК/c.
+        if (ownClockM == null) {
+            return na(DetectorKind.CLOCK_JUMP, "$detail; псевдодальности несогласованы — сбой часов чипа, не подмена")
+        }
+        if (prevOwnClockM != null) {
+            val total = deltaBias + (ownClockM - prevOwnClockM) / GpsEphemeris.C * 1e9
+            val totalJump = abs(total - expectedRate * dtS)
+            if (totalJump <= t.clockJumpNanos) {
+                return pass(DetectorKind.CLOCK_JUMP, "$detail; поглощено смещением часов МНК, остаток %.0f нс".format(totalJump))
+            }
+            return alert(DetectorKind.CLOCK_JUMP, "$detail; полная оценка времени скачет на %.0f нс при согласованных дальностях".format(totalJump))
+        }
+        return alert(DetectorKind.CLOCK_JUMP, detail)
     }
 
     internal fun network(input: SpoofingInput): DetectorResult {

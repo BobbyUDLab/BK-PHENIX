@@ -1,6 +1,7 @@
 package ru.bkphenix.core.gnss
 
 import ru.bkphenix.core.math.Matrix
+import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.pow
@@ -43,8 +44,43 @@ public class Raim(
     private val falseAlarmProbability: Double = 1e-5,
     private val missedDetectionProbability: Double = 1e-3,
     private val maxExclusions: Int = 2,
+    /** Грубая ошибка: невязка больше этого порога — сбой слежения (мс-неоднозначность, срыв), не многолучёвость. */
+    private val grossErrorM: Double = 500.0,
+    /** Сколько грубых ошибок можно отсеять до проверки χ² (не больше трети измерений). */
+    private val maxGrossExclusions: Int = 10,
 ) {
     public fun process(inputs: List<RangeInput>): RaimResult {
+        val (screened, gross) = screenGross(inputs)
+        val result = processScreened(screened)
+        if (gross.isEmpty() || result.solution == null) return result
+        val status = if (result.status == RaimStatus.OK) RaimStatus.EXCLUDED else result.status
+        return result.copy(status = status, excluded = gross + result.excluded)
+    }
+
+    /**
+     * Отсев грубых ошибок по одной: убирается спутник с наибольшей |невязкой|, пока она больше [grossErrorM].
+     * Такие сбои у телефонов в городе — обычное дело; одиночный подменённый спутник с км-смещением
+     * так же отсеивается, а согласованная подмена всех спутников невязок не даёт и ловится другими детекторами.
+     */
+    private fun screenGross(inputs: List<RangeInput>): Pair<List<RangeInput>, List<ExcludedSatellite>> {
+        var current = inputs
+        val excluded = mutableListOf<ExcludedSatellite>()
+        // Не больше четверти измерений и с запасом избыточности: иначе отсев может сойтись к ложному кластеру
+        // (журнал 2026-11-04, эпоха скачка часов: 7 спутников «согласовались» в 18 км от истины).
+        val limit = minOf(maxGrossExclusions, inputs.size / 4)
+        while (true) {
+            val s = solver.solve(current) ?: break
+            if (s.degreesOfFreedom < 2) break
+            val worst = s.residualsM.maxByOrNull { abs(it.value) } ?: break
+            if (abs(worst.value) <= grossErrorM) break
+            if (excluded.size >= limit || current.size - 1 < minForDetection(current) + 2) return inputs to emptyList()
+            excluded += ExcludedSatellite(worst.key, worst.value)
+            current = current.filter { it.sat != worst.key }
+        }
+        return current to excluded
+    }
+
+    private fun processScreened(inputs: List<RangeInput>): RaimResult {
         val all = solver.solve(inputs) ?: return RaimResult(RaimStatus.UNAVAILABLE, null, emptyList(), null, null, null)
         if (all.degreesOfFreedom < 1) return RaimResult(RaimStatus.UNAVAILABLE, all, emptyList(), null, null, null)
         if (passes(all)) return result(RaimStatus.OK, all, emptyList())

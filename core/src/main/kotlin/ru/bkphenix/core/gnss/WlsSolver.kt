@@ -65,13 +65,18 @@ public data class WlsSolution(
 public class WlsSolver(
     private val elevationMaskDeg: Double = 10.0,
     private val maxIterations: Int = 10,
+    /**
+     * Маска C/N0: ниже ~15 дБ·Гц код не отслеживается надёжно (Kirin отдаёт 9 дБ·Гц с ошибками в десятки км,
+     * журнал 2026-11-04).
+     */
+    private val minCn0DbHz: Double = 15.0,
 ) {
     /**
      * Сопоставляет псевдодальности с эфемеридами: по одному измерению L1 на спутник,
      * только здоровые спутники с действующими эфемеридами.
      */
     public fun prepare(ranges: List<Pseudorange>, ephemerides: EphemerisStore): List<RangeInput> =
-        ranges.filter { it.measurement.band in SINGLE_FREQUENCY_BANDS }
+        ranges.filter { it.measurement.band in SINGLE_FREQUENCY_BANDS && it.measurement.cn0DbHz >= minCn0DbHz }
             .groupBy { it.measurement.sat }
             .mapNotNull { (sat, list) ->
                 // BeiDou: B1I (TGD1 из D1/D2), иначе лучший по C/N0.

@@ -35,6 +35,7 @@ import ru.bkphenix.app.ui.components.InfoRow
 import ru.bkphenix.app.ui.components.SectionCard
 import ru.bkphenix.app.ui.components.fmt
 import ru.bkphenix.app.ui.track.TrackCard
+import ru.bkphenix.core.geo.ErrorCircle
 import ru.bkphenix.core.anchor.AnchorState
 import ru.bkphenix.core.integrity.IntegrityState
 
@@ -59,7 +60,11 @@ fun CoordinateScreen(viewModel: CoordinateViewModel, locationGranted: Boolean, o
             InfoRow(stringResource(R.string.label_longitude), solution?.point?.longitude?.fmt(6))
             InfoRow(
                 stringResource(R.string.label_accuracy),
-                solution?.accuracyM?.let { stringResource(R.string.accuracy_meters, it.fmt(1)) },
+                solution?.accuracyM?.let { stringResource(R.string.accuracy_r95, ErrorCircle.radius(it).fmt(1), it.fmt(1)) },
+            )
+            InfoRow(
+                stringResource(R.string.label_hpl),
+                solution?.gnss?.raim?.horizontalProtectionLevelM?.let { stringResource(R.string.accuracy_meters, it.fmt(0)) },
             )
             if (solution == null) EmptyHint(stringResource(if (state.running) R.string.waiting_data else R.string.not_running))
         }

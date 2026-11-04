@@ -25,8 +25,15 @@ class CoordinateViewModel(private val repository: PhenixRepository) : ViewModel(
     /** Якорь из текущей итоговой точки. @return false, если точки ещё нет. */
     fun anchorFromCurrent(): Boolean {
         val s = state.value.solution ?: return false
-        val point = s.comparison.estimate ?: return false
-        repository.setAnchor(point, s.comparison.accuracyM ?: AnchorInput.DEFAULT_ACCURACY_M)
+        // Якорь ставит человек: он доступен и когда компаратор всё отсеял — тогда берём
+        // лучшее из имеющихся наблюдений (включая отсеянные), человек подтверждает место сам.
+        val point = s.comparison.estimate
+        if (point != null) {
+            repository.setAnchor(point, s.comparison.accuracyM ?: AnchorInput.DEFAULT_ACCURACY_M)
+            return true
+        }
+        val best = (s.comparison.accepted + s.comparison.rejected).minByOrNull { it.accuracyM } ?: return false
+        repository.setAnchor(best.point, maxOf(best.accuracyM, AnchorInput.DEFAULT_ACCURACY_M))
         return true
     }
 

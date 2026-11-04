@@ -82,4 +82,66 @@ class ContinuityTest {
         val r = m.check(listOf(PositionObservation(PositionSource.GNSS, car(70), 5.0, 0)), 70_000)
         assertEquals(IntegrityState.OK, r.report.state)
     }
+
+    @Test
+    fun `два решения в одну миллисекунду не дают невозможной скорости`() {
+        val m = ContinuityMonitor()
+        repeat(10) { t -> m.check(listOf(PositionObservation(PositionSource.GNSS, start, 3.0, 0)), t * 1000L) }
+        val near = PositionObservation(PositionSource.GNSS_WLS, start.offset(4.0, 90.0), 3.0, 0)
+        val r = m.check(listOf(near), 9_001)
+        assertTrue(r.dropped.isEmpty(), "отсеяно: ${r.report.reasons}")
+        assertEquals(IntegrityState.OK, r.report.state)
+    }
+
+    @Test
+    fun `после ложного отсева фильтр восстанавливается при согласии с сетью`() {
+        val m = ContinuityMonitor()
+        repeat(10) { t -> m.check(listOf(PositionObservation(PositionSource.GNSS, start, 3.0, 0)), t * 1000L) }
+        // Истинное положение в 2 км (например, устаревшая точка до рестарта); сеть подтверждает GNSS.
+        val truth = start.offset(2_000.0, 45.0)
+        var last: ContinuityResult? = null
+        for (t in 10 until 20) {
+            last = m.check(
+                listOf(
+                    PositionObservation(PositionSource.GNSS, truth, 3.0, 0),
+                    PositionObservation(PositionSource.CELL, truth.offset(50.0, 0.0), 100.0, 0),
+                ),
+                t * 1000L,
+            )
+        }
+        assertTrue(last!!.dropped.isEmpty(), "GNSS так и не вернулся")
+    }
+
+    @Test
+    fun `подмена в 2 км против сети не восстанавливается`() {
+        val m = ContinuityMonitor()
+        repeat(10) { t -> m.check(listOf(PositionObservation(PositionSource.GNSS, start, 3.0, 0)), t * 1000L) }
+        val fake = start.offset(2_000.0, 45.0)
+        for (t in 10 until 30) {
+            val r = m.check(
+                listOf(
+                    PositionObservation(PositionSource.GNSS, fake, 3.0, 0),
+                    PositionObservation(PositionSource.CELL, start, 100.0, 0),
+                ),
+                t * 1000L,
+            )
+            assertTrue(r.dropped.isNotEmpty(), "t=$t: поддельный GNSS принят")
+        }
+    }
+
+    @Test
+    fun `дрейф счисления и сети не даёт ложного плавного увода`() {
+        val m = ContinuityMonitor()
+        var truth = start
+        repeat(900) { t ->
+            truth = truth.offset(1.2, 30.0)
+            val obs = listOf(
+                PositionObservation(PositionSource.GNSS, noisy(truth, 3.0), 3.0, 0),
+                // Счисление уходит на 0,3 м/с, сеть с постоянным смещением 40 м при заявленных 10 м.
+                PositionObservation(PositionSource.DEAD_RECKONING, truth.offset(0.3 * t, 120.0), 5.0, 0),
+                PositionObservation(PositionSource.NETWORK, truth.offset(40.0, 200.0), 10.0, 0),
+            )
+            assertEquals(IntegrityState.OK, m.check(obs, t * 1000L).report.state, "t=$t")
+        }
+    }
 }

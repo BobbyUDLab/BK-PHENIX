@@ -197,7 +197,11 @@ public class EphemerisStore {
      * Заменяет внешний набор всех систем (RINEX BRDM/BRDC). Эфемериды GPS идут в тот же
      * набор, что и [replaceExternal]; остальные хранятся по спутнику.
      */
-    public fun replaceExternalNav(list: List<NavEphemeris>) {
+    /** Коэффициенты Klobuchar из последнего навигационного файла. */
+    public var ionosphere: KlobucharCoefficients? = null
+
+    public fun replaceExternalNav(list: List<NavEphemeris>, ionosphere: KlobucharCoefficients? = this.ionosphere) {
+        this.ionosphere = ionosphere
         replaceExternal(list.filterIsInstance<GpsEphemeris>())
         externalNav.clear()
         list.filter { it !is GpsEphemeris }.groupBy { it.sat }.forEach { (sat, items) ->

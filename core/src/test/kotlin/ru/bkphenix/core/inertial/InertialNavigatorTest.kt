@@ -16,12 +16,17 @@ class InertialNavigatorTest {
     private val dtNanos = 10_000_000L
 
     /** Пешеход идёт на север со скоростью шагов; ГНСС есть первые 30 с, затем пропадает на [outageS]. */
-    private fun walk(outageS: Int, steps: Boolean): Pair<Double, InertialEstimate?> {
-        val nav = InertialNavigator(MotionMode.WALK)
+    private fun walk(
+        outageS: Int,
+        steps: Boolean,
+        gyroBiasZ: Double = 0.0,
+        mag: DoubleArray? = magNorth,
+        nav: InertialNavigator = InertialNavigator(MotionMode.WALK),
+    ): Pair<Double, InertialEstimate?> {
         // Скорость, которую даёт детектор шагов на этом сигнале: 1.8 шаг/с × длина по Вайнбергу.
         val speed = 1.8 * 0.48 * Math.pow(2 * 2.5 * 0.9, 0.25)
         // Сначала 5 с на месте: ориентация сходится.
-        for (i in 0 until 500) nav.onImu(ImuSample(i * dtNanos, doubleArrayOf(0.0, 0.0, 9.81), doubleArrayOf(0.0, 0.0, 0.0), magNorth))
+        for (i in 0 until 500) nav.onImu(ImuSample(i * dtNanos, doubleArrayOf(0.0, 0.0, 9.81), doubleArrayOf(0.0, 0.0, gyroBiasZ), mag))
         val start = 500
         val total = (30 + outageS) * 100
         var truth = origin
@@ -30,7 +35,7 @@ class InertialNavigatorTest {
             val t = k / 100.0
             truth = origin.offset(speed * t, 0.0)
             val accel = if (steps) WalkSignal.accel(t) else doubleArrayOf(0.0, 0.0, 9.81)
-            nav.onImu(ImuSample(i * dtNanos, accel, WalkSignal.gyro(t, steps).let { doubleArrayOf(it[0], it[1], 0.0) }, magNorth))
+            nav.onImu(ImuSample(i * dtNanos, accel, WalkSignal.gyro(t, steps).let { doubleArrayOf(it[0], it[1], gyroBiasZ) }, mag))
             if (k % 100 == 0 && t < 30) nav.onFix(truth, 4.0, i * dtNanos / 1_000_000)
         }
         val e = nav.estimate((start + total) * dtNanos / 1_000_000)
@@ -44,6 +49,22 @@ class InertialNavigatorTest {
         assertTrue(err < 10.0, "ошибка $err м")
         assertTrue(err < 2.5 * e!!.sigmaM, "ошибка $err при σ ${e.sigmaM}")
         assertTrue(e.sinceFixMillis > 29_000)
+    }
+
+    /**
+     * Критерий п.7: дрейф за 60 с без ГНСС при ходьбе. Худший случай — магнитометр недоступен (помехи в
+     * помещении), гироскоп со смещением 0,02 рад/с (~1,1 °/с, типично для MEMS телефона без калибровки).
+     */
+    @Test
+    fun `60 с без ГНСС — дрейф с калибровкой смещения гироскопа в покое не больше 15 м и в пределах 2,5σ`() {
+        val nav = InertialNavigator(MotionMode.WALK)
+        val (err, e) = walk(60, steps = true, gyroBiasZ = 0.02, mag = null, nav = nav)
+        assertNotNull(e)
+        assertEquals(0.02, nav.gyroBiasRadS[2], 0.002)
+        assertTrue(nav.gyroCalibrated)
+        println("Дрейф счисления за 60 с: ${"%.1f".format(err)} м, σ ${"%.1f".format(e!!.sigmaM)} м")
+        assertTrue(err < 15.0, "ошибка $err м")
+        assertTrue(err < 2.5 * e.sigmaM, "ошибка $err при σ ${e.sigmaM}")
     }
 
     @Test

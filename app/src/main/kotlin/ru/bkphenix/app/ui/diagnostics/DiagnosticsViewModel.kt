@@ -16,6 +16,7 @@ import ru.bkphenix.app.data.model.SensorKind
 import ru.bkphenix.app.data.model.SensorSnapshot
 import ru.bkphenix.app.data.model.SourceStatus
 import ru.bkphenix.app.data.model.WifiSnapshot
+import ru.bkphenix.app.data.source.RinexEphemerisInfo
 
 data class DiagnosticsUiState(
     val statuses: Map<String, SourceStatus> = emptyMap(),
@@ -29,6 +30,7 @@ data class DiagnosticsUiState(
 
 class DiagnosticsViewModel(private val repository: PhenixRepository) : ViewModel() {
     val logState: StateFlow<RawLogState> = repository.logState
+    val rinexInfo: StateFlow<RinexEphemerisInfo?> = repository.rinexInfo
 
     fun toggleLog() = if (repository.logState.value.recording) repository.stopLog() else repository.startLog()
 

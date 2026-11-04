@@ -10,6 +10,7 @@ import ru.bkphenix.app.data.source.CellDataSource
 import ru.bkphenix.app.data.source.GnssDataSource
 import ru.bkphenix.app.data.source.LocationDataSource
 import ru.bkphenix.app.data.source.NetworkTimeDataSource
+import ru.bkphenix.app.data.source.RinexEphemerisSource
 import ru.bkphenix.app.data.source.SensorDataSource
 import ru.bkphenix.app.data.source.WifiDataSource
 import java.io.File
@@ -27,6 +28,7 @@ class AppContainer(context: Context) {
             ble = BleDataSource(app),
             sensors = SensorDataSource(app),
             networkTimeSource = NetworkTimeDataSource(app),
+            rinex = RinexEphemerisSource(File(app.filesDir, "ephemeris")),
             logRecorder = RawLogRecorder(File(app.filesDir, "logs")) {
                 GnssLoggerFormat.header(
                     appVersion = BuildConfig.VERSION_NAME,

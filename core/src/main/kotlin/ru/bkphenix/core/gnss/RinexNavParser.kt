@@ -4,7 +4,8 @@ import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
 /**
- * Разбор GPS LNAV из навигационных файлов RINEX 3.x/4.x (broadcast ephemeris, например BRDC IGS).
+ * Разбор GPS LNAV из навигационных файлов RINEX 3.x/4.x (broadcast ephemeris, например BRDC IGS)
+ * и GPS-навигационных файлов RINEX 2.x (`*.yyn`): они приводятся к раскладке RINEX 3.
  * Прочие системы и записи RINEX 4, отличные от LNAV, пропускаются. Углы в RINEX уже в радианах,
  * toe — в секундах GPS-недели; toc переводится из календарной даты GPS-времени.
  */
@@ -20,7 +21,9 @@ public object RinexNavParser {
 
     /** Все записи GPS LNAV файла; повреждённые записи пропускаются. */
     public fun parseGps(text: String): List<GpsEphemeris> {
-        val lines = text.lineSequence().toList()
+        val raw = text.lineSequence().toList()
+        val version = raw.firstOrNull()?.take(9)?.trim()?.toDoubleOrNull() ?: 3.0
+        val lines = if (version < 3.0) toRinex3(raw) else raw
         val body = lines.indexOfFirst { it.contains("END OF HEADER") }.let { if (it < 0) 0 else it + 1 }
         val result = ArrayList<GpsEphemeris>()
         var lnavExpected = true
@@ -42,6 +45,32 @@ public object RinexNavParser {
             }
         }
         return result
+    }
+
+    private val rinex2Start = Regex("^[ 0-9]\\d( [ 0-9]\\d){5} [ 0-9]\\d\\.\\d")
+
+    /** RINEX 2: «PP YY MM DD HH MM SS.S» + поля с колонки 22, строки орбит — с колонки 3. */
+    private fun toRinex3(lines: List<String>): List<String> {
+        val body = lines.indexOfFirst { it.contains("END OF HEADER") } + 1
+        val out = ArrayList<String>(lines.size)
+        out += lines.subList(0, body)
+        var i = body
+        while (i < lines.size) {
+            val head = lines[i]
+            if (rinex2Start.containsMatchIn(head) && head.length >= 22) {
+                val n = head.substring(0, 22).trim().split(Regex("\\s+"))
+                val yy = n[1].toInt()
+                val year = if (yy < 80) 2000 + yy else 1900 + yy
+                val sec = n[6].toDouble().toInt()
+                out += "G%02d %04d %02d %02d %02d %02d %02d".format(n[0].toInt(), year, n[2].toInt(), n[3].toInt(), n[4].toInt(), n[5].toInt(), sec) +
+                    head.substring(22)
+                for (k in 1..ORBIT_LINES) if (i + k < lines.size) out += " " + lines[i + k]
+                i += ORBIT_LINES + 1
+            } else {
+                i++
+            }
+        }
+        return out
     }
 
     private fun parseRecord(rec: List<String>): GpsEphemeris? {

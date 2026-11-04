@@ -19,6 +19,13 @@ class RawMeasurementMappingTest {
     }
 
     @Test
+    fun `время ГЛОНАСС известно по биту TOD`() {
+        // constellationType 3 = ГЛОНАСС, state 0x80 = STATE_GLO_TOD_DECODED.
+        assertTrue(RawMeasurementMapping.measurement(3, 19, 1_602e6, 35.0, 1L, 7L, 0.0, 0x80, 0.0, 1.0).towKnown)
+        assertFalse(RawMeasurementMapping.measurement(1, 5, 1_575.42e6, 35.0, 1L, 7L, 0.0, 0x80, 0.0, 1.0).towKnown)
+    }
+
+    @Test
     fun `измерение переносится в модель ядра`() {
         val m = RawMeasurementMapping.measurement(6, 11, 1_176.45e6, 38.5, 123L, 7L, 0.5, 0x8, -120.0, 3.0)
         assertEquals(GnssConstellation.GALILEO, m.sat.constellation)

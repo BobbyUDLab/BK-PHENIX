@@ -5,6 +5,7 @@ import ru.bkphenix.core.PhenixSolution
 import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.gnss.GnssIntegrityProcessor
 import ru.bkphenix.core.gnss.RawGnssEpoch
+import ru.bkphenix.core.gnss.SatId
 import ru.bkphenix.core.gnss.SyntheticEpoch
 import ru.bkphenix.core.model.PositionObservation
 import ru.bkphenix.core.model.PositionSource
@@ -29,17 +30,22 @@ internal data class ScenarioEpoch(
     val raw: RawGnssEpoch,
     /** Атака активна в этой эпохе (ожидается тревога). */
     val attack: Boolean,
-    /** Номер спутника с ошибкой, если есть. */
-    val faultySv: Int? = null,
+    /** Спутник с ошибкой, если есть. */
+    val faultySat: SatId? = null,
 )
 
 /**
  * Генератор сценариев поверх [SyntheticEpoch]: сырые измерения GPS L1, решение чипа и независимая
- * сота (σ 100 м) для кворума. Детерминирован по [seed].
+ * сота (σ 100 м) для кворума. С [multiGnss] — два созвездия (GPS + Galileo) с межсистемным смещением.
+ * Детерминирован по [seed].
  */
-internal class ScenarioGenerator(private val seed: Long = 42, private val badSatelliteBiasM: Double = 150.0) {
+internal class ScenarioGenerator(
+    private val seed: Long = 42,
+    private val badSatelliteBiasM: Double = 150.0,
+    private val multiGnss: Boolean = false,
+) {
     private val origin = GeoPoint(55.75393, 37.620795, 150.0)
-    private val base = SyntheticEpoch(truth = origin)
+    private val base = SyntheticEpoch(truth = origin, multiGnss = multiGnss)
 
     /** Процессор с эфемеридами синтетического созвездия. */
     fun core(): PhenixCore = PhenixCore(gnssProcessor = GnssIntegrityProcessor(ephemerides = base.store))
@@ -53,14 +59,15 @@ internal class ScenarioGenerator(private val seed: Long = 42, private val badSat
             val truth = origin.offset(1.2 * t, 0.0)
             var gnssPoint = truth
             var attack = false
-            var faults = emptyMap<Int, Double>()
-            var faultySv: Int? = null
+            var faults = emptyMap<SatId, Double>()
+            var faultySat: SatId? = null
             var networkAlso = false
             when (kind) {
                 ScenarioKind.BAD_SATELLITE -> {
-                    val sv = base.visible()[t % base.visible().size].svid
-                    faults = mapOf(sv to badSatelliteBiasM)
-                    faultySv = sv
+                    val visible = base.visibleAll()
+                    val sat = visible[t % visible.size].sat
+                    faults = mapOf(sat to badSatelliteBiasM)
+                    faultySat = sat
                     attack = true
                 }
                 ScenarioKind.SPOOF_OFFSET -> if (t >= 20) { gnssPoint = truth.offset(600.0, 90.0); attack = true }
@@ -69,7 +76,7 @@ internal class ScenarioGenerator(private val seed: Long = 42, private val badSat
                 ScenarioKind.COORDINATED -> { gnssPoint = truth.offset(800.0, 90.0); attack = true; networkAlso = true }
                 else -> Unit
             }
-            val raw = SyntheticEpoch(truth = gnssPoint, noiseM = noiseM, seed = seed + t).epoch(faultsM = faults)
+            val raw = SyntheticEpoch(truth = gnssPoint, noiseM = noiseM, seed = seed + t, multiGnss = multiGnss).epoch(faultsBySat = faults)
             val obs = buildList {
                 add(PositionObservation(PositionSource.GNSS, noisy(gnssPoint, 3.0), 5.0, t * 1000L))
                 if (networkAlso) {
@@ -78,7 +85,7 @@ internal class ScenarioGenerator(private val seed: Long = 42, private val badSat
                     add(PositionObservation(PositionSource.CELL, noisy(truth, 60.0), 100.0, t * 1000L))
                 }
             }
-            ScenarioEpoch(t, truth, obs, raw, attack, faultySv)
+            ScenarioEpoch(t, truth, obs, raw, attack, faultySat)
         }
     }
 }

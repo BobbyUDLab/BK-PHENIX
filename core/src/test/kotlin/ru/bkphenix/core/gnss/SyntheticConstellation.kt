@@ -1,5 +1,7 @@
 package ru.bkphenix.core.gnss
 
+import ru.bkphenix.core.model.GnssConstellation
+
 /** Синтетическое созвездие GPS: 6 плоскостей по 6 спутников, наклонение 55°, круговые орбиты. */
 internal object SyntheticConstellation {
     const val SQRT_A = 5153.7
@@ -22,4 +24,11 @@ internal object SyntheticConstellation {
             toe = toe,
         ).copy(af0 = (k - 18) * 1e-5, af1 = 1e-12 * k)
     }
+
+    /** Второе созвездие с метками Galileo: те же орбиты GPS, сдвинутые по долготе узла и аномалии. */
+    fun galileo(toe: Double): List<NavEphemeris> = all(toe).map { e ->
+        AsSystem(e.copy(omega0 = e.omega0 + Math.toRadians(30.0), m0 = e.m0 + Math.toRadians(30.0)), SatId(GnssConstellation.GALILEO, e.svid))
+    }
+
+    private class AsSystem(private val e: GpsEphemeris, override val sat: SatId) : NavEphemeris by e
 }

@@ -30,6 +30,7 @@ class RaimPresentationTest {
                 DetectorResult(DetectorKind.AGC, DetectorVerdict.NOT_APPLICABLE, "нет АРУ"),
             ),
             ephemerisCount = 9,
+            ephemerisBySystem = mapOf(GnssConstellation.GALILEO to 4, GnssConstellation.GPS to 5),
             pseudorangeCount = 11,
             ownSolution = null,
             report = IntegrityReport.OK,
@@ -40,6 +41,7 @@ class RaimPresentationTest {
         assertEquals("невязка 312.4 м", ui.excluded.single().residual)
         assertEquals("21.0 м", ui.protectionLevel)
         assertEquals("5.2 из 18.4", ui.statistic)
+        assertEquals("9 сп. (G 5 · E 4) · псевдодальностей 11", ui.ephemerides)
         assertEquals(listOf("Тревога", "Нет данных"), ui.detectors.map { it.verdict })
         assertEquals(Severity.ALERT, ui.detectors.first().severity)
     }

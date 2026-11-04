@@ -1,5 +1,7 @@
 package ru.bkphenix.app.ui.satellites
 
+import ru.bkphenix.core.gnss.SatId
+import ru.bkphenix.core.model.GnssConstellation
 import ru.bkphenix.core.gnss.DetectorVerdict
 import ru.bkphenix.core.gnss.GnssIntegrityResult
 import ru.bkphenix.core.gnss.RaimStatus
@@ -39,11 +41,12 @@ object RaimPresentation {
             severity = severity,
             excluded = raim?.excluded.orEmpty().map { ExcludedRow(it.sat.label, "невязка ${fmt(it.residualM, 1)} м") },
             ownSolution = r.ownSolution?.let {
-                "${fmt(it.point.latitude, 6)}, ${fmt(it.point.longitude, 6)} ± ${fmt(it.horizontalSigmaM, 1)} м · ${it.used.size} сп."
+                "${fmt(it.point.latitude, 6)}, ${fmt(it.point.longitude, 6)} ± ${fmt(it.horizontalSigmaM, 1)} м · ${it.used.size} сп. ${systems(it.used)}"
             },
             protectionLevel = raim?.horizontalProtectionLevelM?.let { "${fmt(it, 1)} м" },
             statistic = raim?.testStatistic?.let { t -> "${fmt(t, 1)} из ${raim.threshold?.let { fmt(it, 1) } ?: "—"}" },
-            ephemerides = "${r.ephemerisCount} сп. GPS" +
+            ephemerides = "${r.ephemerisCount} сп." +
+                (if (r.ephemerisBySystem.isNotEmpty()) " (" + bySystem(r.ephemerisBySystem) + ")" else "") +
                 (if (r.externalEphemerisCount > 0) " (RINEX: ${r.externalEphemerisCount})" else "") +
                 " · псевдодальностей ${r.pseudorangeCount}",
             detectors = r.detectors.map {
@@ -66,4 +69,12 @@ object RaimPresentation {
     }
 
     private fun fmt(v: Double, digits: Int) = if (v.isNaN()) "—" else String.format(Locale.ROOT, "%.${digits}f", v)
+
+    /** «G 12 · R 8 · E 9 · C 14» в порядке систем. */
+    internal fun bySystem(counts: Map<GnssConstellation, Int>): String =
+        counts.entries.sortedBy { it.key.ordinal }.joinToString(" · ") { "${SatId(it.key, 1).label.first()} ${it.value}" }
+
+    /** Системы, вошедшие в решение: «GPS+ГЛОНАСС+Galileo». */
+    internal fun systems(used: List<SatId>): String =
+        used.map { it.constellation }.distinct().sortedBy { it.ordinal }.joinToString("+") { it.displayName }
 }

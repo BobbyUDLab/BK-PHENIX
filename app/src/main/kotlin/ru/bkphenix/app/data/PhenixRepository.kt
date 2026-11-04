@@ -54,6 +54,13 @@ import ru.bkphenix.core.gnss.RawGnssEpoch
 import ru.bkphenix.core.model.SatelliteStatus
 import ru.bkphenix.core.model.TimeObservation
 import ru.bkphenix.core.model.TimeSource
+import ru.bkphenix.app.data.roads.RoadGraphStore
+import ru.bkphenix.core.roads.MapMatcher
+import ru.bkphenix.core.roads.MatchResult
+import ru.bkphenix.core.roads.OffRoadMonitor
+import ru.bkphenix.core.roads.RoadGraph
+import ru.bkphenix.core.integrity.IntegrityReport
+import ru.bkphenix.core.integrity.IntegrityState
 import ru.bkphenix.core.radio.CellLocator
 import ru.bkphenix.core.radio.CellTowerDatabase
 import ru.bkphenix.app.data.cells.AssetCellTowerDatabase
@@ -82,6 +89,8 @@ class PhenixRepository(
     private val logRecorder: RawLogRecorder,
     private val rinex: RinexEphemerisSource,
     cellTowers: CellTowerDatabase = EmptyCellTowerDatabase,
+    /** Дорожный граф для привязки к дорогам; null — привязка выключена. */
+    private val roads: RoadGraphStore? = null,
     private val clock: () -> Long = System::currentTimeMillis,
     /** Монотонное время в мс в базе ИИБ (elapsedRealtime). */
     private val realtime: () -> Long = android.os.SystemClock::elapsedRealtime,
@@ -97,6 +106,14 @@ class PhenixRepository(
     val cellDatabaseInfo: StateFlow<CellDatabaseInfo?> =
         (cellTowers as? AssetCellTowerDatabase)?.info ?: MutableStateFlow(null)
     private val aggregator = ObservationAggregator()
+
+    // Привязка к дорогам: только для показа и как сигнал целостности. Привязанная точка в компаратор
+    // не идёт и решение не подменяет, чтобы не маскировать увод ГНСС.
+    private var matcher: Pair<RoadGraph, MapMatcher>? = null
+    private val offRoad = OffRoadMonitor()
+    private val _roadMatch = MutableStateFlow<MatchResult?>(null)
+    /** Итог привязки последней эпохи: исходная точка, точка на дороге, расстояние до дороги. */
+    val roadMatch: StateFlow<MatchResult?> = _roadMatch.asStateFlow()
     private val pendingSubframes = ArrayList<NavigationSubframe>()
     private var pendingRaw: RawGnssEpoch? = null
     private var rawTimeOffsetMs: Long? = null
@@ -179,6 +196,7 @@ class PhenixRepository(
         if (job?.isActive == true) return
         job = scope.launch {
             (cellTowers as? AssetCellTowerDatabase)?.let { launch { it.load() } }
+            roads?.let { launch { it.load() } }
             _capabilities.value = gnss.capabilities()
             collectSafely(location.locations()) { raw ->
                 LocationMapping.toObservation(raw)?.let(aggregator::put)
@@ -270,6 +288,13 @@ class PhenixRepository(
         }
     }
 
+    private fun matchRoad(solution: PhenixSolution): MatchResult? {
+        val graph = roads?.graph ?: return null
+        val point = solution.point ?: return null
+        val m = matcher?.takeIf { it.first === graph }?.second ?: MapMatcher(graph).also { matcher = graph to it }
+        return m.match(point, solution.accuracyM, motionMode)
+    }
+
     private fun solveEpoch() {
         val now = clock()
         val time = buildList {
@@ -282,13 +307,18 @@ class PhenixRepository(
         // Прогноз счисления берём до учёта решения этой эпохи, чтобы он проверял его независимо.
         val rt = realtime()
         deadReckoning.observation(rt, now)?.let(aggregator::put)
-        val solution = core.solve(
+        val solved = core.solve(
             observations = aggregator.fresh(now),
             nowMillis = now,
             timeObservations = time,
             rawGnss = raw,
             navigationSubframes = subframes,
         )
+        val match = matchRoad(solved)
+        _roadMatch.value = match
+        val offRoadReport = offRoad.update(match)
+        val solution = if (offRoadReport.state == IntegrityState.OK) solved
+        else solved.copy(integrity = IntegrityReport.merge(listOf(solved.integrity, offRoadReport)))
         _solution.value = solution
         deadReckoning.onSolution(solution.point, solution.accuracyM, solution.integrity.state, rt)
         solution.point?.let { updateDeclination(it, now) }

@@ -44,6 +44,10 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import ru.bkphenix.app.R
 import ru.bkphenix.app.data.map.MapFileState
+import ru.bkphenix.app.data.roads.RoadGraphState
+import ru.bkphenix.app.data.roads.RoadGraphStore
+import ru.bkphenix.core.roads.MapMatcher
+import ru.bkphenix.core.roads.MatchResult
 import ru.bkphenix.app.ui.components.fmt
 import ru.bkphenix.core.geo.ErrorCircle
 import ru.bkphenix.core.geo.GeoPoint
@@ -86,6 +90,11 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
     val motionMode by viewModel.motionMode.collectAsStateWithLifecycle()
     val viewMode by viewModel.viewMode.collectAsStateWithLifecycle()
     val recording by viewModel.recording.collectAsStateWithLifecycle()
+    val road by viewModel.roadMatch.collectAsStateWithLifecycle()
+    val roadGraph by viewModel.roadGraph.collectAsStateWithLifecycle()
+    val roadPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(viewModel::importRoads)
+    }
     var follow by remember { mutableStateOf(true) }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var style by remember { mutableStateOf<Style?>(null) }
@@ -125,8 +134,8 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
         }
     }
 
-    LaunchedEffect(style, solution, held, track) {
-        style?.let { MapLayers.update(it, solution, held, track) }
+    LaunchedEffect(style, solution, held, track, road) {
+        style?.let { MapLayers.update(it, solution, held, track, road.takeIf { motionMode != MotionMode.NONE }) }
     }
     // Камера: в режиме «Местоположение» следует за позицией; в «Авто» поворачивается по курсу.
     LaunchedEffect(map, held, follow, viewMode, motionMode) {
@@ -178,6 +187,9 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
+                roadLine(motionMode, roadGraph, road)?.let { (text, alarm) ->
+                    Text(text, style = MaterialTheme.typography.bodySmall, color = if (alarm) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+                }
             }
         }
         Column(
@@ -199,9 +211,32 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
             }
         }
         // Замена файла карты (новый регион или обновление) — редкое действие, кнопка в углу.
-        SmallFloatingActionButton(onClick = onReimport, modifier = Modifier.align(Alignment.BottomStart).padding(12.dp)) {
-            Text(stringResource(R.string.map_reimport), Modifier.padding(8.dp))
+        Column(Modifier.align(Alignment.BottomStart).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SmallFloatingActionButton(onClick = { roadPicker.launch(arrayOf("*/*")) }) {
+                Text(stringResource(if (roadGraph is RoadGraphState.Ready) R.string.map_roads_reimport else R.string.map_roads_import), Modifier.padding(8.dp))
+            }
+            SmallFloatingActionButton(onClick = onReimport) {
+                Text(stringResource(R.string.map_reimport), Modifier.padding(8.dp))
+            }
         }
+    }
+}
+
+/** Строка привязки: расстояние от исходной точки до дороги; true — вне дорог (сигнал целостности). */
+@Composable
+private fun roadLine(mode: MotionMode, graph: RoadGraphState, road: MatchResult?): Pair<String, Boolean>? {
+    if (mode == MotionMode.NONE) return null
+    return when (graph) {
+        is RoadGraphState.Missing -> stringResource(R.string.map_roads_missing) to false
+        is RoadGraphState.Importing -> stringResource(R.string.map_importing, graph.copiedBytes / (1 shl 20)) to false
+        is RoadGraphState.Loading -> stringResource(R.string.map_roads_loading) to false
+        is RoadGraphState.Failed -> graph.message to true
+        is RoadGraphState.Ready -> when {
+            road == null -> null
+            road.distanceToRoadM == null -> stringResource(R.string.map_roads_far, MapMatcher.SEARCH_M.fmt(0)) to true
+            road.offRoad -> stringResource(R.string.map_roads_off, road.distanceToRoadM!!.fmt(0)) to true
+            else -> stringResource(R.string.map_roads_on, road.distanceToRoadM!!.fmt(0)) to false
+        }?.let { (t, a) -> "$t · ${RoadGraphStore.SOURCE}" to a }
     }
 }
 

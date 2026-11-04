@@ -13,6 +13,7 @@
   <string name="label_anchor">Якорь</string>
   <string name="label_anchor_point">Точка якоря</string>
   <string name="label_anchor_accuracy">Погрешность якоря, м (по умолчанию 10)</string>
+  <string name="label_independent">Независимых групп в итоге</string>
   <string name="label_sources">Источники и доверие</string>
   <string name="accuracy_meters">± %1$s м</string>
   <string name="waiting_data">Ожидание данных от источников…</string>

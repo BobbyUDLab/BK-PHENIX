@@ -72,7 +72,13 @@ public class PhenixCore(
         // Якорь проверяется против решения без него, а в итоговом решении он решает спор групп.
         val unanchored = comparator.compare(continuityResult.kept)
         val anchorObs = anchorManager.observation(nowMillis)
-        val compared = if (anchorObs != null) comparator.compare(continuityResult.kept, priority = anchorObs) else unanchored
+        // Только актуальный якорь решает спор групп; устаревший — обычный голос и никого не отсеивает
+        // (0.5.1, авто: старый якорь с ростом σ 3 м/с отсеивал все источники, позиция замирала, трек не шёл).
+        val compared = when {
+            anchorObs == null -> unanchored
+            anchorManager.isPriority -> comparator.compare(continuityResult.kept, priority = anchorObs)
+            else -> comparator.compare(continuityResult.kept + anchorObs)
+        }
         val comparison = compared.copy(rejected = compared.rejected + continuityResult.dropped)
         // При сырых данных время сверяет детектор NITZ с подробностями; общий движок его не дублирует.
         val timeForEngine = if (gnss != null) emptyList() else timeObservations
@@ -87,16 +93,17 @@ public class PhenixCore(
             integrity = IntegrityReport.merge(listOf(integrity, if (nitz) gnss.report else filtered))
         }
         integrity = IntegrityReport.merge(listOf(integrity, continuityResult.report))
-        val anchor = anchorManager.evaluate(unanchored.estimate, unanchored.accuracyM, nowMillis)
+        val anchor = anchorManager.evaluate(unanchored.estimate, unanchored.accuracyM, nowMillis, unanchored.hasQuorum)
         if (anchor.state == AnchorState.ANCHOR_CONFLICT) {
             integrity = IntegrityReport.merge(
                 listOf(integrity, IntegrityReport(IntegrityState.SPOOFING_SUSPECTED, listOf(anchor.message))),
             )
         }
+        // Позиция не пропадает молча: без других источников — положение по якорю с накопленной σ.
         val usesAnchorFallback = comparison.estimate == null && anchor.anchor != null
         return PhenixSolution(
-            point = if (usesAnchorFallback) anchor.anchor?.point else comparison.estimate,
-            accuracyM = if (usesAnchorFallback) anchor.anchor?.accuracyM else comparison.accuracyM,
+            point = if (usesAnchorFallback) anchor.propagatedPoint ?: anchor.anchor?.point else comparison.estimate,
+            accuracyM = if (usesAnchorFallback) anchor.propagatedSigmaM ?: anchor.anchor?.accuracyM else comparison.accuracyM,
             integrity = integrity,
             anchor = anchor,
             comparison = comparison,

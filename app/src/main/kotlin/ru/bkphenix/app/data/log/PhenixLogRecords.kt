@@ -6,6 +6,7 @@ import ru.bkphenix.app.data.model.NetworkTimeSample
 import ru.bkphenix.app.data.model.SensorSnapshot
 import ru.bkphenix.core.PhenixSolution
 import ru.bkphenix.core.geo.GeoPoint
+import ru.bkphenix.core.model.PositionObservation
 
 /** Поля записей JSONL: одна запись `epoch` в секунду с результатами ядра и окружением. */
 object PhenixLogRecords {
@@ -17,6 +18,7 @@ object PhenixLogRecords {
         cells: List<CellSnapshot>,
         sensors: Collection<SensorSnapshot>,
         networkTime: NetworkTimeSample?,
+        observations: List<PositionObservation> = emptyList(),
     ): Map<String, Any?> = linkedMapOf(
         "point" to solution.point?.let(::point),
         "accuracyM" to solution.accuracyM,
@@ -26,6 +28,10 @@ object PhenixLogRecords {
             "deviationM" to solution.anchor.deviationM,
             "allowedDeviationM" to solution.anchor.allowedDeviationM,
         ),
+        // Наблюдения источников до сравнения (включая счисление) — для повторного прогона счисления и NEES.
+        "observations" to observations.map {
+            point(it.point) + mapOf("source" to it.source.name, "sigmaM" to it.accuracyM, "t" to it.timestampMillis)
+        },
         "comparison" to mapOf(
             "accepted" to solution.comparison.accepted.map { it.source.name },
             "rejected" to solution.comparison.rejected.map { it.source.name },

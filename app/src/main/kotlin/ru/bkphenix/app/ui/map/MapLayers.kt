@@ -18,6 +18,8 @@ import org.maplibre.geojson.Point
 import org.maplibre.geojson.Polygon
 import ru.bkphenix.core.PhenixSolution
 import ru.bkphenix.core.geo.ErrorCircle
+import ru.bkphenix.core.integrity.PointTrust
+import ru.bkphenix.core.integrity.PointTrustLevel
 import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.model.PositionSource
 import ru.bkphenix.core.track.HeldPosition
@@ -128,7 +130,14 @@ internal object MapLayers {
         style.getSourceAs<GeoJsonSource>(POSITION)?.setGeoJson(
             FeatureCollection.fromFeatures(
                 held?.let {
-                    val color = if (it.extrapolated) HELD_COLOR else POSITION_COLOR
+                    // Точка без кворума рисуется цветом «не подтверждено», а не цветом надёжной позиции.
+                    val trust = PointTrust.of(solution).level
+                    val color = when {
+                        it.extrapolated -> HELD_COLOR
+                        trust == PointTrustLevel.ALARM -> REJECTED
+                        trust != PointTrustLevel.RELIABLE -> UNCONFIRMED_COLOR
+                        else -> POSITION_COLOR
+                    }
                     val hpl = solution?.gnss?.raim?.horizontalProtectionLevelM?.takeIf { !held.extrapolated }
                     marker(it.point, it.accuracyM, color, null, 0.2, 9.0) + listOfNotNull(hpl?.let { r -> ring(it.point, r, color) })
                 }.orEmpty(),
@@ -162,6 +171,8 @@ internal object MapLayers {
     private val POSITION_COLOR get() = if (dark) PhenixPalette.hex(PhenixPalette.CYAN) else "#1A73E8"
     private val ROAD_COLOR get() = if (dark) PhenixPalette.hex(PhenixPalette.GOLD) else "#6D4C41"
     private val HELD_COLOR get() = if (dark) "#A9B8CC" else "#8A8F98"
+    /** Янтарный: точка без кворума независимых источников. */
+    private val UNCONFIRMED_COLOR get() = if (dark) "#FFB300" else "#E37400"
     private val ANCHOR_COLOR get() = if (dark) "#C792EA" else "#7B1FA2"
     private val REJECTED get() = if (dark) PhenixPalette.hex(PhenixPalette.Oled.STATUS_BAD) else "#D93A3A"
 

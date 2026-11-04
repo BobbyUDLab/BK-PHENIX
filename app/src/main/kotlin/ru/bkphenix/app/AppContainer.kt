@@ -16,6 +16,7 @@ import ru.bkphenix.app.data.source.SensorDataSource
 import ru.bkphenix.app.data.source.WifiDataSource
 import ru.bkphenix.app.data.track.TrackDatabase
 import ru.bkphenix.app.data.track.TrackRecorder
+import ru.bkphenix.app.ui.theme.ThemePreferences
 import java.io.File
 
 /** Ручное внедрение зависимостей: один репозиторий на процесс. */
@@ -48,4 +49,6 @@ class AppContainer(context: Context) {
     }
 
     val mapFiles: MapFileStore by lazy { MapFileStore(app) }
+
+    val themePreferences: ThemePreferences by lazy { ThemePreferences(app) }
 }

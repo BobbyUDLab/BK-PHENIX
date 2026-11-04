@@ -21,6 +21,8 @@ import ru.bkphenix.core.integrity.IntegrityContext
 import ru.bkphenix.core.integrity.IntegrityEngine
 import ru.bkphenix.core.integrity.IntegrityReport
 import ru.bkphenix.core.integrity.IntegrityState
+import kotlin.math.max
+import kotlin.math.sqrt
 import ru.bkphenix.core.integrity.NavigationWord
 import ru.bkphenix.core.model.PositionObservation
 import ru.bkphenix.core.model.PositionSource
@@ -79,7 +81,7 @@ public class PhenixCore(
             anchorManager.isPriority -> comparator.compare(continuityResult.kept, priority = anchorObs)
             else -> comparator.compare(continuityResult.kept + anchorObs)
         }
-        val comparison = compared.copy(rejected = compared.rejected + continuityResult.dropped)
+        var comparison = compared.copy(rejected = compared.rejected + continuityResult.dropped)
         // При сырых данных время сверяет детектор NITZ с подробностями; общий движок его не дублирует.
         val timeForEngine = if (gnss != null) emptyList() else timeObservations
         var integrity = integrityEngine.evaluate(
@@ -103,6 +105,39 @@ public class PhenixCore(
                 listOf(integrity, IntegrityReport(IntegrityState.SPOOFING_SUSPECTED, listOf(anchor.message))),
             )
         }
+        // При тревоге целостности не оставляем единственную, противоречащую сети GNSS/WLS-точку финальным ответом.
+        // Сетевой провайдер не становится независимым подтверждением: используем его только как явно подозрительный fallback.
+        val network = unanchored.rejected
+            .filter { it.source == PositionSource.NETWORK }
+            .maxByOrNull { it.timestampMillis }
+        val gnssAccepted = unanchored.accepted.any { SourceGroup.GNSS_SIGNAL in it.origin }
+        val networkDistance = network?.let { unanchored.estimate?.distanceTo(it.point) }
+        val networkGate = if (network != null && unanchored.accuracyM != null) {
+            max(NETWORK_MIN_GATE_M, NETWORK_GATE_SIGMA * sqrt(unanchored.accuracyM * unanchored.accuracyM + network.accuracyM * network.accuracyM))
+        } else Double.POSITIVE_INFINITY
+        if (
+            integrity.state == IntegrityState.SPOOFING_SUSPECTED &&
+            !unanchored.hasQuorum &&
+            gnssAccepted &&
+            network != null &&
+            networkDistance != null &&
+            networkDistance > networkGate
+        ) {
+            val fallback = when {
+                anchorObs == null -> comparator.compare(listOf(network))
+                anchorManager.isPriority -> comparator.compare(listOf(network), priority = anchorObs)
+                else -> comparator.compare(listOf(network, anchorObs))
+            }
+            comparison = fallback.copy(
+                rejected = (fallback.rejected + continuityResult.kept.filterNot { it in fallback.accepted } + continuityResult.dropped).distinct(),
+            )
+            integrity = IntegrityReport.merge(
+                listOf(integrity, IntegrityReport(
+                    IntegrityState.SPOOFING_SUSPECTED,
+                    listOf("GNSS/WLS далеко от сети без независимого кворума; показана сеть с низким доверием"),
+                )),
+            )
+        }
         // Позиция не пропадает молча: без других источников — положение по якорю с накопленной σ.
         // Якорь никогда не останавливает навигацию: если с ним все отсеяны, берём решение без якоря.
         val est = comparison.estimate ?: unanchored.estimate
@@ -121,5 +156,7 @@ public class PhenixCore(
     private companion object {
         /** Нижняя граница σ собственного решения: модель ошибок псевдодальностей оптимистична. */
         const val MIN_WLS_SIGMA_M = 3.0
+        const val NETWORK_GATE_SIGMA = 4.0
+        const val NETWORK_MIN_GATE_M = 200.0
     }
 }

@@ -1,5 +1,6 @@
 package ru.bkphenix.app.ui.coordinate
 
+import ru.bkphenix.app.ui.theme.LocalStatusColors
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -149,16 +150,18 @@ private fun AnchorState.label(): Int = when (this) {
     AnchorState.ANCHOR_CONFLICT -> R.string.anchor_conflict
 }
 
-private val Ok = Color(0xFF2E9D5B)
-private val Warn = Color(0xFFE0A000)
-private val Bad = Color(0xFFD93A3A)
+private val Ok: Color @Composable get() = LocalStatusColors.current.ok
+private val Warn: Color @Composable get() = LocalStatusColors.current.warn
+private val Bad: Color @Composable get() = LocalStatusColors.current.bad
 
+@Composable
 private fun IntegrityState.color(): Color = when (this) {
     IntegrityState.OK -> Ok
     IntegrityState.NO_DATA, IntegrityState.INCONSISTENT, IntegrityState.SUSPICIOUS -> Warn
     else -> Bad
 }
 
+@Composable
 private fun TrustLevel.color(): Color = when (this) {
     TrustLevel.HIGH -> Ok
     TrustLevel.MEDIUM -> Color.Unspecified

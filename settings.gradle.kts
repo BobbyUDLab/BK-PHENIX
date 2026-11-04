@@ -21,4 +21,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "BK-PHENIX"
-include(":core", ":app")
+include(":core", ":app", ":tools")

@@ -8,14 +8,18 @@ import ru.bkphenix.app.PhenixApplication
 import ru.bkphenix.app.ui.coordinate.CoordinateViewModel
 import ru.bkphenix.app.ui.diagnostics.DiagnosticsViewModel
 import ru.bkphenix.app.ui.satellites.SatellitesViewModel
+import ru.bkphenix.app.ui.track.TrackViewModel
 
 object ViewModelFactory {
     val instance: ViewModelProvider.Factory = viewModelFactory {
         initializer { CoordinateViewModel(repository()) }
         initializer { SatellitesViewModel(repository()) }
         initializer { DiagnosticsViewModel(repository()) }
+        initializer { TrackViewModel(container().trackRecorder) }
     }
 
-    private fun androidx.lifecycle.viewmodel.CreationExtras.repository() =
-        (this[APPLICATION_KEY] as PhenixApplication).container.repository
+    private fun androidx.lifecycle.viewmodel.CreationExtras.container() =
+        (this[APPLICATION_KEY] as PhenixApplication).container
+
+    private fun androidx.lifecycle.viewmodel.CreationExtras.repository() = container().repository
 }

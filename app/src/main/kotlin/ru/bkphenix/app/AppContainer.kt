@@ -13,6 +13,8 @@ import ru.bkphenix.app.data.source.NetworkTimeDataSource
 import ru.bkphenix.app.data.source.RinexEphemerisSource
 import ru.bkphenix.app.data.source.SensorDataSource
 import ru.bkphenix.app.data.source.WifiDataSource
+import ru.bkphenix.app.data.track.TrackDatabase
+import ru.bkphenix.app.data.track.TrackRecorder
 import java.io.File
 
 /** Ручное внедрение зависимостей: один репозиторий на процесс. */
@@ -38,5 +40,9 @@ class AppContainer(context: Context) {
                 )
             },
         )
+    }
+
+    val trackRecorder: TrackRecorder by lazy {
+        TrackRecorder(TrackDatabase.create(app).tracks(), repository.solution, File(app.filesDir, "gpx"))
     }
 }

@@ -20,6 +20,19 @@ public data class ComparisonResult(
 
     /** Число независимых подтверждений итога (групп, а не источников). */
     val independentConfirmations: Int get() = votes.size
+
+    /**
+     * Голоса, которым можно верить как независимым: голос, состоящий только из источников,
+     * способных опираться на GNSS ([ru.bkphenix.core.model.PositionSource.mayUseGnss]), не считается.
+     */
+    val strongConfirmations: Int get() = votes.count { v -> v.observations.any { !it.source.mayUseGnss } }
+
+    /** Кворум: итог поддерживают не менее двух сильных независимых групп. */
+    val hasQuorum: Boolean get() = strongConfirmations >= QUORUM
+
+    public companion object {
+        public const val QUORUM: Int = 2
+    }
 }
 
 /**
@@ -53,10 +66,10 @@ public class PositionComparator(
 
         val votes = Independence.votes(accepted)
         val fused = votes.map { v ->
-            val w = v.observations.sumOf { it.weight }
-            val lat = v.observations.sumOf { it.point.latitude * it.weight } / w
-            val lon = v.observations.sumOf { it.point.longitude * it.weight } / w
-            Triple(lat, lon, v.observations.maxOf { it.weight })
+            val w = v.observations.sumOf { it.effectiveWeight }
+            val lat = v.observations.sumOf { it.point.latitude * it.effectiveWeight } / w
+            val lon = v.observations.sumOf { it.point.longitude * it.effectiveWeight } / w
+            Triple(lat, lon, v.observations.maxOf { it.effectiveWeight })
         }
         val totalWeight = fused.sumOf { it.third }
         return ComparisonResult(
@@ -78,14 +91,14 @@ public class PositionComparator(
         val compatible = Array(n) { i -> BooleanArray(n) { j -> i == j || areConsistent(obs[i], obs[j]) } }
         var bestMask = 1
         var bestVotes = 1
-        var bestWeight = obs[0].weight
+        var bestWeight = obs[0].effectiveWeight
         for (mask in 1 until (1 shl n)) {
             val members = (0 until n).filter { mask and (1 shl it) != 0 }
             val clique = members.all { i -> members.all { j -> compatible[i][j] } }
             if (!clique) continue
             val votes = Independence.count(members.map { obs[it] })
             // Вес — по голосам (лучшее наблюдение голоса), чтобы дубли одной группы не перевешивали.
-            val weight = Independence.votes(members.map { obs[it] }).sumOf { v -> v.observations.maxOf { it.weight } }
+            val weight = Independence.votes(members.map { obs[it] }).sumOf { v -> v.observations.maxOf { it.effectiveWeight } }
             val sameWeight = abs(weight - bestWeight) <= bestWeight * 1e-9
             val better = votes > bestVotes ||
                 (votes == bestVotes && !sameWeight && weight > bestWeight) ||
@@ -106,3 +119,10 @@ public class PositionComparator(
         public const val MAX_OBSERVATIONS: Int = 12
     }
 }
+
+/** Вес в компараторе: источник, который может опираться на GNSS, весит меньше. */
+internal val PositionObservation.effectiveWeight: Double
+    get() = if (source.mayUseGnss) weight * GNSS_ASSISTED_WEIGHT else weight
+
+/** Множитель веса источника, который может опираться на GNSS (эквивалент σ ×2). */
+internal const val GNSS_ASSISTED_WEIGHT: Double = 0.25

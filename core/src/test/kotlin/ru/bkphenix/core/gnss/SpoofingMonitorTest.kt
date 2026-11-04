@@ -44,6 +44,10 @@ class SpoofingMonitorTest {
         assertEquals(DetectorVerdict.PASS, m.dualFrequency(input(withL5 { 8.0 + it % 5 })).verdict)
         assertEquals(DetectorVerdict.ALERT, m.dualFrequency(input(withL5 { if (it % 2 == 0) -80.0 else 120.0 })).verdict)
         assertEquals(DetectorVerdict.NOT_APPLICABLE, m.dualFrequency(input(l1)).verdict)
+        // Один спутник с неоднозначностью кода L5 (~20 км, как в журнале 2026-11-04) — не подмена.
+        var first: Int? = null
+        val oneOutlier = withL5 { sv -> if ((first ?: sv.also { first = it }) == sv) 20_833.0 else 8.0 + sv % 5 }
+        assertEquals(DetectorVerdict.PASS, m.dualFrequency(input(oneOutlier)).verdict)
     }
 
     @Test

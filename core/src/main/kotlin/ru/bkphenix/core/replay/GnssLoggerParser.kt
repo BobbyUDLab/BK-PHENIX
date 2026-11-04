@@ -103,13 +103,13 @@ public object GnssLoggerParser {
     }
 
     private fun fixOf(f: List<String>, h: Map<String, Int>): LoggedFix? {
-        val lat = f.double(h, "Latitude") ?: return null
-        val lon = f.double(h, "Longitude") ?: return null
+        val lat = (f.double(h, "Latitude") ?: f.double(h, "LatitudeDegrees")) ?: return null
+        val lon = (f.double(h, "Longitude") ?: f.double(h, "LongitudeDegrees")) ?: return null
         val time = f.long(h, "(UTC)TimeInMs") ?: f.long(h, "UnixTimeMillis") ?: return null
         return LoggedFix(
             provider = f.str(h, "Provider") ?: "?",
-            point = GeoPoint(lat, lon, f.double(h, "Altitude")),
-            accuracyM = f.double(h, "Accuracy")?.takeIf { it > 0 } ?: 10.0,
+            point = GeoPoint(lat, lon, f.double(h, "Altitude") ?: f.double(h, "AltitudeMeters")),
+            accuracyM = (f.double(h, "Accuracy") ?: f.double(h, "AccuracyMeters"))?.takeIf { it > 0 } ?: 10.0,
             utcMillis = time,
         )
     }

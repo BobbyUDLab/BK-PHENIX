@@ -33,6 +33,7 @@ import ru.bkphenix.app.ui.components.EmptyHint
 import ru.bkphenix.app.ui.components.InfoRow
 import ru.bkphenix.app.ui.components.SectionCard
 import ru.bkphenix.app.ui.components.fmt
+import ru.bkphenix.app.ui.track.TrackCard
 import ru.bkphenix.core.anchor.AnchorState
 import ru.bkphenix.core.integrity.IntegrityState
 
@@ -97,6 +98,7 @@ fun CoordinateScreen(viewModel: CoordinateViewModel, locationGranted: Boolean, o
                 )
             }
         }
+        TrackCard()
     }
 
     if (showDialog) {

@@ -37,6 +37,7 @@ import ru.bkphenix.app.ui.components.fmt
 import ru.bkphenix.app.ui.track.TrackCard
 import ru.bkphenix.core.geo.ErrorCircle
 import ru.bkphenix.core.anchor.AnchorState
+import ru.bkphenix.core.anchor.AnchorFreshness
 import ru.bkphenix.core.integrity.IntegrityState
 import ru.bkphenix.core.integrity.PointTrust
 import ru.bkphenix.core.integrity.PointTrustLevel
@@ -55,6 +56,17 @@ fun CoordinateScreen(viewModel: CoordinateViewModel, locationGranted: Boolean, o
             SectionCard(stringResource(R.string.permission_title)) {
                 Text(stringResource(R.string.permission_rationale), style = MaterialTheme.typography.bodyMedium)
                 Button(onClick = onRequestPermissions) { Text(stringResource(R.string.permission_grant)) }
+            }
+        }
+        solution?.anchor?.takeIf { it.freshness == AnchorFreshness.CAN_UPDATE || it.freshness == AnchorFreshness.MUST_UPDATE }?.let { a ->
+            // Заметная плашка без звука: якорь пора подтвердить заново.
+            val must = a.freshness == AnchorFreshness.MUST_UPDATE
+            SectionCard(a.freshness!!.label) {
+                Text(a.freshnessReason ?: "", color = if (must) Bad else Warn, style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { viewModel.anchorFromCurrent() }) { Text(stringResource(R.string.action_anchor_confirm_here)) }
+                    OutlinedButton(onClick = { showDialog = true }) { Text(stringResource(R.string.action_anchor_manual)) }
+                }
             }
         }
         SectionCard(stringResource(R.string.section_position)) {
@@ -88,6 +100,18 @@ fun CoordinateScreen(viewModel: CoordinateViewModel, locationGranted: Boolean, o
             InfoRow(stringResource(R.string.label_state), anchor?.state?.let { stringResource(it.label()) })
             anchor?.anchor?.let {
                 InfoRow(stringResource(R.string.label_anchor_point), "${it.point.latitude.fmt(6)}, ${it.point.longitude.fmt(6)}")
+            }
+            anchor?.freshness?.let { f ->
+                InfoRow(
+                    stringResource(R.string.label_anchor_freshness), f.label,
+                    when (f) { AnchorFreshness.ACTUAL -> Ok; AnchorFreshness.CAN_UPDATE -> Warn; AnchorFreshness.MUST_UPDATE -> Bad },
+                )
+                anchor.ageSeconds?.let { InfoRow(stringResource(R.string.label_anchor_age), "${(it / 60).toInt()} мин ${(it % 60).toInt()} с") }
+                anchor.traveledM?.let { InfoRow(stringResource(R.string.label_anchor_traveled), if (it >= 1000) "${(it / 1000).fmt(2)} км" else "${it.fmt(0)} м") }
+                anchor.propagatedSigmaM?.let { InfoRow(stringResource(R.string.label_anchor_sigma), "σ ${it.fmt(0)} м") }
+                anchor.deviationM?.let { d ->
+                    InfoRow(stringResource(R.string.label_anchor_deviation), "${d.fmt(0)} м (допуск ${anchor.allowedDeviationM?.fmt(0)} м)")
+                }
             }
             anchor?.message?.let { EmptyHint(it) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

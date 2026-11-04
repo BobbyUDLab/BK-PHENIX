@@ -28,7 +28,7 @@ class ScenarioValidationTest {
      * со смещением пропускаются: там сырые измерения целиком честно описывают ложную точку.
      */
     private fun hplCoverage(r: List<Pair<ScenarioEpoch, PhenixSolution>>): Double? {
-        val xs = r.filter { (e, _) -> !e.attack || e.faultySv != null }.mapNotNull { (e, s) ->
+        val xs = r.filter { (e, _) -> !e.attack || e.faultySat != null }.mapNotNull { (e, s) ->
             val own = s.gnss?.ownSolution ?: return@mapNotNull null
             val hpl = s.gnss?.raim?.horizontalProtectionLevelM ?: return@mapNotNull null
             own.point.distanceTo(e.truth) <= hpl
@@ -60,15 +60,49 @@ class ScenarioValidationTest {
         for (bias in listOf(80.0, 150.0, 200.0)) {
             val g = ScenarioGenerator(badSatelliteBiasM = bias)
             val r = run(g.core(), g.generate(ScenarioKind.BAD_SATELLITE))
-            val detected = r.count { (e, s) ->
-                val raim = s.gnss?.raim
-                raim != null && (raim.status == RaimStatus.FAULT || raim.excluded.any { it.sat.svid == e.faultySv })
-            }.toDouble() / r.size
+            val detected = detection(r)
             val hpl = hplCoverage(r)
-            record(ScenarioKind.BAD_SATELLITE, detected, null, hpl, "ошибка +${bias.toInt()} м" + if (bias < 200) " (справочно)" else "")
+            record(ScenarioKind.BAD_SATELLITE, detected, null, hpl, "GPS, ошибка +${bias.toInt()} м" + if (bias < 200) " (справочно)" else "")
             if (bias >= 200) assertTrue(detected >= 0.95, "обнаружение ${pct(detected)}")
             assertTrue(hpl != null && hpl >= 0.99, "+$bias м: покрытие HPL $hpl")
         }
+    }
+
+    /**
+     * Доля эпох, где RAIM обнаружил ошибку (FAULT или исключён именно плохой спутник). Эпохи, где
+     * плохой спутник не вошёл в решение (ниже маски по углу места), не учитываются: он не влияет на точку.
+     */
+    private fun detection(r: List<Pair<ScenarioEpoch, PhenixSolution>>): Double {
+        val relevant = r.filter { (e, s) ->
+            val raim = s.gnss?.raim
+            raim?.solution?.used?.contains(e.faultySat) == true || raim?.excluded?.any { it.sat == e.faultySat } == true
+        }
+        return relevant.count { (e, s) ->
+            val raim = s.gnss?.raim!!
+            raim.status == RaimStatus.FAULT || raim.excluded.any { it.sat == e.faultySat }
+        }.toDouble() / relevant.size
+    }
+
+    @Test
+    fun `многосистемный приём — плохой спутник на 200 м обнаруживается, ложных тревог нет`() {
+        // +80 м — справочно: с ростом числа степеней свободы растёт и порог χ², а σ измерений в модели
+        // консервативна (χ² чистых эпох в разы ниже n − 6), поэтому обнаружимое смещение не падает до 80 м.
+        for (bias in listOf(80.0, 200.0)) {
+            val g = ScenarioGenerator(badSatelliteBiasM = bias, multiGnss = true)
+            val r = run(g.core(), g.generate(ScenarioKind.BAD_SATELLITE))
+            val detected = detection(r)
+            val hpl = hplCoverage(r)
+            record(ScenarioKind.BAD_SATELLITE, detected, null, hpl, "GPS+Galileo, ошибка +${bias.toInt()} м" + if (bias < 200) " (справочно)" else "")
+            if (bias >= 200) assertTrue(detected >= 0.95, "GPS+Galileo: обнаружение ${pct(detected)}")
+            assertTrue(hpl != null && hpl >= 0.99, "GPS+Galileo +$bias м: покрытие HPL $hpl")
+        }
+        val g = ScenarioGenerator(multiGnss = true)
+        val clean = run(g.core(), g.generate(ScenarioKind.NOISE))
+        val fa = clean.count { (_, s) -> alarm(s) }.toDouble() / clean.size
+        val cov = hplCoverage(clean)
+        record(ScenarioKind.NOISE, null, fa, cov, "GPS+Galileo")
+        assertTrue(fa <= 0.01, "GPS+Galileo: ложные тревоги ${pct(fa)}")
+        assertTrue(cov != null && cov >= 0.99, "GPS+Galileo: покрытие HPL $cov")
     }
 
     @Test

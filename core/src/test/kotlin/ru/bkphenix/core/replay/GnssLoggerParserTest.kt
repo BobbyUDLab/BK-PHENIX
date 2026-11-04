@@ -40,4 +40,19 @@ class GnssLoggerParserTest {
         assertEquals(4.0, fix.accuracyM)
         assertEquals(1_471_902_355_999L, fix.utcMillis)
     }
+
+    @Test
+    fun `фиксы в формате GnssLogger v2 и BK-PHENIX — колонки с единицами`() {
+        val v2 = GnssLoggerParser.parse(
+            sequenceOf(
+                "# Fix,Provider,LatitudeDegrees,LongitudeDegrees,AltitudeMeters,SpeedMps,AccuracyMeters,BearingDegrees,UnixTimeMillis",
+                "Fix,GPS,55.75139216855342,37.61833227738487,179.49,,2.7066464,,1793782776000",
+            ),
+        )
+        val fix = v2.fixes.single()
+        assertEquals(55.75139216855342, fix.point.latitude, 1e-12)
+        assertEquals(179.49, fix.point.altitude!!, 1e-9)
+        assertEquals(2.7066464, fix.accuracyM, 1e-9)
+        assertEquals(1_793_782_776_000L, fix.utcMillis)
+    }
 }

@@ -120,5 +120,5 @@ public class MadgwickFilter(public var beta: Double = 0.1, public var magneticGa
         )
     }
 
-    private fun norm(v: DoubleArray): Double = sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+
 }

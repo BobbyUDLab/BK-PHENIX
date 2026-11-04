@@ -56,6 +56,8 @@ import ru.bkphenix.core.model.TimeObservation
 import ru.bkphenix.core.model.TimeSource
 import ru.bkphenix.core.radio.CellLocator
 import ru.bkphenix.core.radio.CellTowerDatabase
+import ru.bkphenix.app.data.cells.AssetCellTowerDatabase
+import ru.bkphenix.app.data.cells.CellDatabaseInfo
 import ru.bkphenix.core.radio.EmptyCellTowerDatabase
 
 /** Статистика проверки чётности GPS LNAV. */
@@ -88,7 +90,12 @@ class PhenixRepository(
     private val coreDispatcher = Dispatchers.Default.limitedParallelism(1)
     private val scope = CoroutineScope(SupervisorJob() + coreDispatcher)
     private val core = PhenixCore()
+    private val cellTowers = cellTowers
     private val cellLocator = CellLocator(cellTowers)
+
+    /** Офлайн-база вышек: сколько сот и откуда, или null, если не загружена. */
+    val cellDatabaseInfo: StateFlow<CellDatabaseInfo?> =
+        (cellTowers as? AssetCellTowerDatabase)?.info ?: MutableStateFlow(null)
     private val aggregator = ObservationAggregator()
     private val pendingSubframes = ArrayList<NavigationSubframe>()
     private var pendingRaw: RawGnssEpoch? = null
@@ -171,6 +178,7 @@ class PhenixRepository(
     fun start() {
         if (job?.isActive == true) return
         job = scope.launch {
+            (cellTowers as? AssetCellTowerDatabase)?.let { launch { it.load() } }
             _capabilities.value = gnss.capabilities()
             collectSafely(location.locations()) { raw ->
                 LocationMapping.toObservation(raw)?.let(aggregator::put)

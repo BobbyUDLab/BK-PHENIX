@@ -1,5 +1,6 @@
 package ru.bkphenix.core.gnss
 
+import ru.bkphenix.core.model.GnssConstellation
 import ru.bkphenix.core.integrity.IntegrityReport
 import ru.bkphenix.core.integrity.IntegrityState
 import ru.bkphenix.core.model.PositionObservation
@@ -10,7 +11,7 @@ import ru.bkphenix.core.model.TimeObservation
 public data class GnssIntegrityResult(
     val raim: RaimResult?,
     val detectors: List<DetectorResult>,
-    /** Сколько спутников GPS имеют эфемериды (из навигационных сообщений или внешние). */
+    /** Сколько спутников всех систем имеют эфемериды (из навигационных сообщений или внешние). */
     val ephemerisCount: Int,
     val pseudorangeCount: Int,
     /** Собственное решение, если RAIM его подтвердил (OK или после исключения). */
@@ -18,6 +19,8 @@ public data class GnssIntegrityResult(
     val report: IntegrityReport,
     /** Из них спутников с внешними эфемеридами (RINEX). */
     val externalEphemerisCount: Int = 0,
+    /** Число спутников с эфемеридами по системам. */
+    val ephemerisBySystem: Map<GnssConstellation, Int> = emptyMap(),
 )
 
 /**
@@ -63,7 +66,8 @@ public class GnssIntegrityProcessor(
         return GnssIntegrityResult(
             raim = raimResult,
             detectors = detectors,
-            ephemerisCount = ephemerides.availableSvids.size,
+            ephemerisCount = ephemerides.availableSats.size,
+            ephemerisBySystem = ephemerides.availableSats.groupingBy { it.constellation }.eachCount(),
             externalEphemerisCount = ephemerides.externalSize,
             pseudorangeCount = ranges.size,
             ownSolution = own,

@@ -237,11 +237,11 @@ class PhenixRepository(
      * (при неудаче — повтор через [RINEX_RETRY_MILLIS]). Загрузка в хранилище идёт в потоке ядра.
      */
     private suspend fun refreshEphemerides() {
-        rinex.loadCached(clock()).takeIf { it.isNotEmpty() }?.let { core.gnssProcessor.ephemerides.replaceExternal(it) }
+        rinex.loadCached(clock())?.let { core.gnssProcessor.ephemerides.replaceExternalNav(it.ephemerides, it.ionosphere) }
         while (true) {
             val fresh = rinex.download(clock())
-            if (fresh.isNotEmpty()) core.gnssProcessor.ephemerides.replaceExternal(fresh)
-            delay(if (fresh.isNotEmpty()) RINEX_REFRESH_MILLIS else RINEX_RETRY_MILLIS)
+            if (fresh != null) core.gnssProcessor.ephemerides.replaceExternalNav(fresh.ephemerides, fresh.ionosphere)
+            delay(if (fresh != null) RINEX_REFRESH_MILLIS else RINEX_RETRY_MILLIS)
         }
     }
 

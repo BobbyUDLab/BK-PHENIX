@@ -76,7 +76,8 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
                 if (r == null) {
                     EmptyHint("Не загружены: нужна сеть. Используются, если чип не отдаёт навигационные сообщения")
                 } else {
-                    InfoRow("Спутников GPS", "${r.satellites} (записей ${r.records})")
+                    InfoRow("Спутников", "${r.satellites} (записей ${r.records})")
+                    InfoRow("Системы", r.systems.ifEmpty { "—" })
                     InfoRow("Файл", "${formatUtc(r.fileTimeMillis)} · ${r.origin}")
                 }
             }

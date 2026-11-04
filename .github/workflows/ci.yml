@@ -30,6 +30,18 @@ jobs:
       - name: Юнит-тесты :core
         run: ./gradlew :core:test
 
+      - name: Метрики валидации в сводку
+        if: always()
+        run: cat core/build/validation/metrics.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Артефакт метрик валидации
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-metrics
+          path: core/build/validation/
+          if-no-files-found: ignore
+
       - name: Юнит-тесты и lint :app
         run: ./gradlew :app:testDebugUnitTest :app:lintDebug
 

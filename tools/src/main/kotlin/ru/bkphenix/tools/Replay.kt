@@ -49,7 +49,7 @@ public fun main(args: Array<String>) {
     println("Эпох: ${log.epochs.size}, фиксов чипа: ${log.fixes.size}, записей эфемерид RINEX: $bySys")
     val csv = args.indexOf("--epochs").takeIf { it >= 0 }?.let { args.getOrNull(it + 1) ?: usage() }?.let(::File)
     val replay = Replay(processor, log.fixes)
-    replay.csv = csv?.printWriter()?.also { it.println("utc,state,raim,chi2,thr,used,prs,alerts,err,clockBiasM,dFullBiasNs") }
+    replay.csv = csv?.printWriter()?.also { it.println("utc,state,raim,chi2,thr,used,prs,alerts,err,clockBiasM,dFullBiasNs,r95,hpl") }
     println(replay.run(log.epochs).report())
     replay.csv?.close()
 }
@@ -153,6 +153,8 @@ internal class Replay(private val processor: GnssIntegrityProcessor, fixes: List
                 result.detectors.filter { it.verdict == DetectorVerdict.ALERT }.joinToString("|") { it.kind.name },
                 if (fix != null && result.ownSolution != null) "%.1f".format(result.ownSolution!!.point.distanceTo(fix.point)) else "",
                 result.raim?.solution?.clockBiasM?.let { "%.0f".format(it) }, curDFull,
+                result.ownSolution?.covarianceEnu?.let { c -> "%.1f".format(R95_PER_AXIS_SIGMA * sqrt((c[0, 0] + c[1, 1]) / 2)) },
+                hpl?.let { "%.1f".format(it) },
             ).joinToString(",") { it?.toString() ?: "" },
         )
         val own = result.ownSolution ?: return

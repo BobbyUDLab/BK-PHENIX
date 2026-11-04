@@ -59,5 +59,6 @@
     <string name="label_hpl">Уровень защиты HPL</string>
     <string name="accuracy_r95">± %1$s м (95 %%), σ %2$s м</string>
     <string name="map_held">удержание по скорости</string>
+    <string name="map_dead_reckoning">счисление по датчикам</string>
     <string name="map_track_stop">Стоп трека (%1$d)</string>
 </resources>

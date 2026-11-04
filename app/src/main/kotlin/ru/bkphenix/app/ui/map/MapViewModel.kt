@@ -25,6 +25,7 @@ import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.track.HeldPosition
 import ru.bkphenix.core.track.MotionMode
 import ru.bkphenix.core.track.MotionModel
+import ru.bkphenix.core.inertial.PositionFusion
 import ru.bkphenix.core.track.TrackPoint
 
 /** Что показывает карта: следит за позицией или показывает трек целиком. */
@@ -40,7 +41,7 @@ class MapViewModel(
     val solution: StateFlow<PhenixSolution?> = repository.solution
     val recording: StateFlow<TrackRecordingState> = recorder.state
 
-    private val motion = MotionModel(MotionMode.CAR)
+    private val motion = MotionModel(MotionMode.CAR).also { repository.motionMode = it.mode }
     private val _motionMode = MutableStateFlow(motion.mode)
     val motionMode: StateFlow<MotionMode> = _motionMode.asStateFlow()
     private val _viewMode = MutableStateFlow(MapViewMode.LOCATION)
@@ -65,19 +66,22 @@ class MapViewModel(
                 val t = clock()
                 if (t != lastTime) motion.update(TrackPoint(t, p, s.accuracyM))
                 lastTime = t
-                _held.value = motion.position(t)
+                _held.value = current()
             }
         }
         viewModelScope.launch {
             while (true) {
                 delay(1_000)
-                _held.value = motion.position(clock())
+                _held.value = current()
             }
         }
     }
 
+    private fun current() = PositionFusion.choose(motion.position(clock()), repository.deadReckoningEstimate())
+
     fun setMotionMode(mode: MotionMode) {
         motion.mode = mode
+        repository.motionMode = mode
         _motionMode.value = mode
     }
 

@@ -34,6 +34,12 @@ public data class ContinuityConfig(
     val holdMillis: Long = 60_000,
     /** Перерыв GNSS, после которого фильтр стартует заново (тоннель), мс. */
     val resetGapMillis: Long = 30_000,
+    /** Минимальный шаг времени для оценки скорости, мс: при меньшем dt скорость не считается. */
+    val minSpeedDtMillis: Long = 500,
+    /** Подряд отсеянных, но согласованных между собой эпох, после которых фильтр перезапускается. */
+    val recoveryEpochs: Int = 5,
+    /** Допуск согласия GNSS с независимыми источниками для перезапуска, м (сверх их σ). */
+    val recoveryAgreementM: Double = 200.0,
 )
 
 /**
@@ -55,12 +61,21 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
     private var cusum = 0.0
     private var alarmUntil = Long.MIN_VALUE
     private var alarmReason: String? = null
+    private var rejectStreak = 0
+    private var lastRejected: PositionObservation? = null
+    private var lastRejectedMillis = 0L
 
     public fun reset() {
         origin = null
         cusum = 0.0
         alarmUntil = Long.MIN_VALUE
         alarmReason = null
+        clearStreak()
+    }
+
+    private fun clearStreak() {
+        rejectStreak = 0
+        lastRejected = null
     }
 
     public fun check(observations: List<PositionObservation>, nowMillis: Long): ContinuityResult {
@@ -86,20 +101,38 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
                 val sn = p[1][0] + r
                 chi2 = de * de / se + dn * dn / sn
                 val jumpM = sqrt(de * de + dn * dn)
-                val speed = if (dt > 0) jumpM / dt else 0.0
+                // При слишком малом dt (два решения в одной эпохе, дубли) скорость не оценивается:
+                // 40 м расхождения за 1 мс давали «41 534 м/с» и отсекали всю группу GNSS.
+                val speedDt = dt >= config.minSpeedDtMillis / 1000.0
+                val speed = if (speedDt) jumpM / dt else 0.0
                 val speedLimit = config.maxSpeedMps + 3 * sqrt(2 * r) / max(dt, 1.0)
                 when {
                     chi2 > config.innovationGate -> {
                         dropped = gnssGroup
                         raise(nowMillis, "Скачок GNSS: ${jumpM.toInt()} м от прогноза (χ² ${chi2.toInt()})")
                     }
-                    dt > 0 && speed > speedLimit + sqrt(p[0][2] + p[1][2]) -> {
+                    speedDt && speed > speedLimit + sqrt(p[0][2] + p[1][2]) -> {
                         dropped = gnssGroup
                         raise(nowMillis, "Невозможная скорость GNSS: ${speed.toInt()} м/с")
                     }
+                    // После отсева ковариация прогноза разрастается, и подмена «пролезла» бы через
+                    // χ²; пока GNSS не сходится с независимыми источниками, отсев продолжается.
+                    rejectStreak > 0 && !agrees(gnss, independent) -> {
+                        dropped = gnssGroup
+                        raise(nowMillis, alarmReason ?: "GNSS расходится с независимыми источниками")
+                    }
                     else -> update(de, dn, r)
                 }
-                if (dt > 0 || dropped.isEmpty()) lastMillis = nowMillis
+                if (dropped.isEmpty()) {
+                    clearStreak()
+                    lastMillis = nowMillis
+                } else if (recover(gnss, independent, nowMillis)) {
+                    // Фильтр застрял на старом состоянии: GNSS N эпох подряд движется правдоподобно
+                    // и согласуется с независимыми источниками — перезапуск, тревога держится holdMillis.
+                    init(gnss, nowMillis)
+                    dropped = emptyList()
+                    clearStreak()
+                }
             }
             if (dropped.isEmpty() && independent.isNotEmpty()) updateCusum(gnss, independent)
         }
@@ -107,6 +140,25 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
         val report = if (reasons.isEmpty()) IntegrityReport.OK else IntegrityReport(IntegrityState.SPOOFING_SUSPECTED, reasons)
         return ContinuityResult(observations - dropped.toSet(), dropped, report, chi2, cusum)
     }
+
+    private fun recover(gnss: PositionObservation, independent: List<PositionObservation>, nowMillis: Long): Boolean {
+        val prev = lastRejected
+        val consistent = prev != null && run {
+            val dt = (nowMillis - lastRejectedMillis) / 1000.0
+            dt > 0 && dt * 1000 <= config.resetGapMillis &&
+                gnss.point.distanceTo(prev.point) <= config.maxSpeedMps * max(dt, 1.0) + 3 * (gnss.accuracyM + prev.accuracyM)
+        }
+        rejectStreak = if (consistent || prev == null) rejectStreak + 1 else 1
+        lastRejected = gnss
+        lastRejectedMillis = nowMillis
+        if (rejectStreak < config.recoveryEpochs) return false
+        return agrees(gnss, independent)
+    }
+
+    /** Согласие GNSS хотя бы с одним независимым источником (без них проверять не с чем — да). */
+    private fun agrees(gnss: PositionObservation, independent: List<PositionObservation>): Boolean =
+        if (independent.isEmpty()) true
+        else independent.any { gnss.point.distanceTo(it.point) <= config.recoveryAgreementM + 3 * it.accuracyM }
 
     private fun raise(nowMillis: Long, reason: String) {
         alarmUntil = nowMillis + config.holdMillis

@@ -37,6 +37,7 @@
     <uses-feature android:name="android.hardware.sensor.barometer" android:required="false" />
 
     <application
+        android:largeHeap="true"
         android:name=".PhenixApplication"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"

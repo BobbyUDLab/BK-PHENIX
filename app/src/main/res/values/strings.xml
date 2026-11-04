@@ -60,5 +60,12 @@
     <string name="accuracy_r95">± %1$s м (95 %%), σ %2$s м</string>
     <string name="map_held">удержание по скорости</string>
     <string name="map_dead_reckoning">счисление по датчикам</string>
+    <string name="map_roads_import">Дороги</string>
+    <string name="map_roads_reimport">Сменить дороги</string>
+    <string name="map_roads_missing">Привязка к дорогам: импортируйте BK-PHENIX-roads-moscow.bin.gz</string>
+    <string name="map_roads_loading">Загрузка дорожного графа…</string>
+    <string name="map_roads_on">До дороги %1$s м (точка на дороге — пунктир)</string>
+    <string name="map_roads_off">Вне дорог: %1$s м от дороги — возможна подмена ГНСС</string>
+    <string name="map_roads_far">Вне дорог: дальше %1$s м от дороги — возможна подмена ГНСС</string>
     <string name="map_track_stop">Стоп трека (%1$d)</string>
 </resources>

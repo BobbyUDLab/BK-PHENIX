@@ -18,6 +18,7 @@ import ru.bkphenix.app.data.source.WifiDataSource
 import ru.bkphenix.app.data.track.TrackDatabase
 import ru.bkphenix.app.data.track.TrackRecorder
 import ru.bkphenix.app.ui.theme.ThemePreferences
+import ru.bkphenix.app.data.roads.RoadGraphStore
 import java.io.File
 
 /** Ручное внедрение зависимостей: один репозиторий на процесс. */
@@ -35,6 +36,7 @@ class AppContainer(context: Context) {
             networkTimeSource = NetworkTimeDataSource(app),
             rinex = RinexEphemerisSource(File(app.filesDir, "ephemeris")),
             cellTowers = AssetCellTowerDatabase(app),
+            roads = roadGraphs,
             logRecorder = RawLogRecorder(File(app.filesDir, "logs")) {
                 GnssLoggerFormat.header(
                     appVersion = BuildConfig.VERSION_NAME,
@@ -51,6 +53,8 @@ class AppContainer(context: Context) {
     }
 
     val mapFiles: MapFileStore by lazy { MapFileStore(app) }
+
+    val roadGraphs: RoadGraphStore by lazy { RoadGraphStore(app) }
 
     val themePreferences: ThemePreferences by lazy { ThemePreferences(app) }
 }

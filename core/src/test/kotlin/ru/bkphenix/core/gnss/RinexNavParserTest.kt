@@ -64,4 +64,23 @@ class RinexNavParserTest {
         assertSame(own, store.select(7, 2443, 252_000.0))
         assertTrue(7 in store.availableSvids)
     }
+
+    @Test
+    fun `RINEX 2 приводится к раскладке RINEX 3`() {
+        // Фрагмент hour2350.16n из google/gps-measurement-tools (Apache-2.0).
+        val rinex2 = javaClass.getResource("/rinex/hour2350_excerpt.16n")!!.readText()
+        val list = RinexNavParser.parseGps(rinex2)
+        assertEquals(listOf(2, 5), list.map { it.svid })
+        // У G05 af0 отрицательный и примыкает к секундам без пробела.
+        assertEquals(-0.964738428593e-04, list[1].af0, 1e-18)
+        val g2 = list[0]
+        assertEquals(2, g2.svid)
+        assertEquals(1911 % 1024, g2.weekMod1024)
+        assertEquals(86_400.0, g2.toe)
+        // 22 августа 2016 — понедельник, 00:00.
+        assertEquals(86_400.0, g2.toc)
+        assertEquals(0.562459696084e-03, g2.af0, 1e-18)
+        assertEquals(0.515361358261e+04, g2.sqrtA, 1e-9)
+        assertEquals(0.158924381249e-01, g2.eccentricity, 1e-15)
+    }
 }

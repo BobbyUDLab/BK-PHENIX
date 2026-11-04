@@ -84,6 +84,38 @@ class ContinuityTest {
     }
 
     @Test
+    fun `выброс сети не блокирует возврат GNSS после тоннеля и помечается неподтверждённым`() {
+        val m = ContinuityMonitor()
+        repeat(10) { t ->
+            m.check(listOf(PositionObservation(PositionSource.GNSS, car(t), 5.0, t * 1_000L)), t * 1_000L)
+        }
+        val now = 70_000L
+        val gnss = PositionObservation(PositionSource.GNSS, car(70), 5.0, now)
+        val network = PositionObservation(PositionSource.NETWORK, start.offset(2_000.0, 180.0), 5.0, now)
+
+        val result = m.check(listOf(gnss, network), now)
+
+        assertTrue(result.dropped.isEmpty(), "сетевая позиция не должна блокировать GNSS после тоннеля")
+        assertTrue(m.unconfirmedRecovery, "без независимого свидетеля восстановление должно быть помечено")
+        assertEquals(IntegrityState.UNCONFIRMED, result.report.state)
+    }
+
+    @Test
+    fun `независимое противоречие продолжает блокировать GNSS после тоннеля`() {
+        val m = ContinuityMonitor()
+        repeat(10) { t ->
+            m.check(listOf(PositionObservation(PositionSource.GNSS, car(t), 5.0, t * 1_000L)), t * 1_000L)
+        }
+        val now = 70_000L
+        val gnss = PositionObservation(PositionSource.GNSS, car(70), 5.0, now)
+        val cell = PositionObservation(PositionSource.CELL, start, 100.0, now)
+
+        val result = m.check(listOf(gnss, cell), now)
+
+        assertTrue(gnss in result.dropped, "независимая сота далеко от GNSS и должна блокировать перезапуск")
+    }
+
+    @Test
     fun `два решения в одну миллисекунду не дают невозможной скорости`() {
         val m = ContinuityMonitor()
         repeat(10) { t -> m.check(listOf(PositionObservation(PositionSource.GNSS, start, 3.0, 0)), t * 1000L) }

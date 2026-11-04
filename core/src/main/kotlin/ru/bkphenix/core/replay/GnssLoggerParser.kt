@@ -1,6 +1,7 @@
 package ru.bkphenix.core.replay
 
 import ru.bkphenix.core.geo.GeoPoint
+import ru.bkphenix.core.gnss.MeasurementState
 import ru.bkphenix.core.gnss.RawGnssClock
 import ru.bkphenix.core.gnss.RawGnssEpoch
 import ru.bkphenix.core.gnss.RawGnssMeasurement
@@ -24,10 +25,9 @@ public data class GnssLog(val epochs: List<RawGnssEpoch>, val fixes: List<Logged
  * Разбор текстовых журналов Google GnssLogger (`gnss_log_*.txt`, `pseudoranges_log_*.txt`).
  * Колонки берутся по именам из заголовка `# Raw,...` и `# Fix,...`, поэтому подходят и старые
  * (1.4), и новые версии формата. Строки `Raw` группируются в эпохи по TimeNanos.
+ * Время излучения считается известным по битам State: TOW, а для ГЛОНАСС — TOD.
  */
 public object GnssLoggerParser {
-    private const val STATE_TOW_DECODED = 0x8
-    private const val STATE_TOW_KNOWN = 0x4000
     private const val BAND_TOLERANCE_MHZ = 6.0
 
     public fun parse(lines: Sequence<String>): GnssLog {
@@ -96,7 +96,7 @@ public object GnssLoggerParser {
             receivedSvTimeNanos = f.long(h, "ReceivedSvTimeNanos") ?: return null,
             receivedSvTimeUncertaintyNanos = f.long(h, "ReceivedSvTimeUncertaintyNanos") ?: Long.MAX_VALUE,
             timeOffsetNanos = f.double(h, "TimeOffsetNanos") ?: 0.0,
-            towKnown = state and (STATE_TOW_DECODED or STATE_TOW_KNOWN) != 0,
+            towKnown = MeasurementState.isTimeKnown(constellation, state),
             pseudorangeRateMps = f.double(h, "PseudorangeRateMetersPerSecond"),
             agcDb = f.double(h, "AgcDb"),
         )

@@ -1,6 +1,7 @@
 package ru.bkphenix.tools
 
 import ru.bkphenix.core.gnss.DetectorVerdict
+import ru.bkphenix.core.integrity.AlarmFilter
 import ru.bkphenix.core.gnss.GnssIntegrityProcessor
 import ru.bkphenix.core.gnss.GnssIntegrityResult
 import ru.bkphenix.core.gnss.Pseudoranges
@@ -28,7 +29,7 @@ private fun leapSeconds(gpsMillis: Long): Long =
     if (gpsMillis + Pseudoranges.GPS_EPOCH_UNIX_MILLIS < 1_483_228_800_000L) 17 else 18
 
 private fun usage(): Nothing {
-    System.err.println("Использование: replay <журнал GnssLogger> [--nav <файл RINEX nav, можно .gz>]")
+    System.err.println("Использование: replay <журнал GnssLogger> [--nav <файл RINEX nav, можно .gz>] [--epochs <CSV по эпохам>]")
     exitProcess(2)
 }
 
@@ -46,7 +47,11 @@ public fun main(args: Array<String>) {
     println("# Прогон ${logFile.name}" + (navFile?.let { " с эфемеридами ${it.name}" } ?: " без внешних эфемерид"))
     val bySys = nav?.ephemerides.orEmpty().groupingBy { it.sat.constellation }.eachCount()
     println("Эпох: ${log.epochs.size}, фиксов чипа: ${log.fixes.size}, записей эфемерид RINEX: $bySys")
-    println(Replay(processor, log.fixes).run(log.epochs).report())
+    val csv = args.indexOf("--epochs").takeIf { it >= 0 }?.let { args.getOrNull(it + 1) ?: usage() }?.let(::File)
+    val replay = Replay(processor, log.fixes)
+    replay.csv = csv?.printWriter()?.also { it.println("utc,state,raim,chi2,thr,used,prs,alerts,err,clockBiasM,dFullBiasNs") }
+    println(replay.run(log.epochs).report())
+    replay.csv?.close()
 }
 
 /** Проигрывает эпохи через [GnssIntegrityProcessor] и копит статистику. */
@@ -74,6 +79,14 @@ internal class Replay(private val processor: GnssIntegrityProcessor, fixes: List
     private var lastMillis: Long? = null
     private var alarmEpisodes = 0
     private var prevAlarm = false
+    private val alarmFilter = AlarmFilter()
+    private var prevFiltered = false
+    private var filteredEpisodes = 0
+    private var filteredAlarmEpochs = 0
+    var csv: java.io.PrintWriter? = null
+    private var prevFull: Long? = null
+    private var curUtc = 0L
+    private var curDFull = 0L
 
     fun run(epochs: List<RawGnssEpoch>): Replay {
         for (epoch in epochs) step(epoch)
@@ -88,11 +101,22 @@ internal class Replay(private val processor: GnssIntegrityProcessor, fixes: List
         if (firstMillis == null) firstMillis = utcMillis
         lastMillis = utcMillis
         epochs++
+        curUtc = utcMillis
+        curDFull = prevFull?.let { fullBias - it } ?: 0L
+        prevFull = fullBias
         Pseudoranges.compute(epoch).map { it.measurement.sat }.distinct()
             .groupingBy { it.constellation.name }.eachCount().forEach { (k, v) -> measured.merge(k, v, Int::plus) }
         val fix = nearestFix(utcMillis)
         val obs = fix?.let { listOf(PositionObservation(PositionSource.GNSS, it.point, it.accuracyM, utcMillis)) }.orEmpty()
         val result = processor.process(epoch, obs, emptyList())
+        if (System.getenv("DEBUG_EPOCH")?.split(",")?.contains((epochs - 1).toString()) == true) {
+            val sol = result.raim?.solution
+            System.err.println("EPOCH ${epochs - 1} clock=${sol?.clockBiasM} isb=${sol?.interSystemBiasesM}")
+            sol?.residualsM?.forEach { (sat, r) ->
+                val m = epoch.measurements.first { it.sat == sat }
+                System.err.println("  ${sat.label} res=%.0f cn0=%.0f unc=%d el=%.0f".format(r, m.cn0DbHz, m.receivedSvTimeUncertaintyNanos, sol.elevationsDeg[sat]))
+            }
+        }
         record(result, fix)
     }
 
@@ -102,9 +126,13 @@ internal class Replay(private val processor: GnssIntegrityProcessor, fixes: List
     private fun record(result: GnssIntegrityResult, fix: LoggedFix?) {
         raimStatus.merge(result.raim?.status?.name ?: "NONE", 1, Int::plus)
         integrity.merge(result.report.state.name, 1, Int::plus)
-        val alarm = result.report.state.name != "OK"
+        val alarm = result.report.state in AlarmFilter.ALARM_STATES
         if (alarm && !prevAlarm) alarmEpisodes++
         prevAlarm = alarm
+        val filtered = alarmFilter.filter(result.report).state in AlarmFilter.ALARM_STATES
+        if (filtered) filteredAlarmEpochs++
+        if (filtered && !prevFiltered) filteredEpisodes++
+        prevFiltered = filtered
         result.detectors.filter { it.verdict == DetectorVerdict.ALERT }.forEach {
             detectorAlarms.merge(it.kind.name, 1, Int::plus)
             detectorAlarmExample.putIfAbsent(it.kind.name, it.detail)
@@ -112,6 +140,15 @@ internal class Replay(private val processor: GnssIntegrityProcessor, fixes: List
         result.ephemerisBySystem.forEach { (k, v) -> withEph.merge(k.name, v, Int::plus) }
         val hpl = result.raim?.horizontalProtectionLevelM
         hpl?.let(hpls::add)
+        csv?.println(
+            listOf(
+                curUtc, result.report.state, result.raim?.status, result.raim?.testStatistic?.let { "%.1f".format(it) },
+                result.raim?.threshold?.let { "%.1f".format(it) }, result.raim?.solution?.used?.size, result.pseudorangeCount,
+                result.detectors.filter { it.verdict == DetectorVerdict.ALERT }.joinToString("|") { it.kind.name },
+                if (fix != null && result.ownSolution != null) "%.1f".format(result.ownSolution!!.point.distanceTo(fix.point)) else "",
+                result.raim?.solution?.clockBiasM?.let { "%.0f".format(it) }, curDFull,
+            ).joinToString(",") { it?.toString() ?: "" },
+        )
         val own = result.ownSolution ?: return
         own.used.groupingBy { it.constellation.name }.eachCount().forEach { (k, v) -> used.merge(k, v, Int::plus) }
         own.interSystemBiasesM.forEach { (k, v) -> isb.getOrPut(k.name) { ArrayList() } += v }
@@ -153,7 +190,9 @@ internal class Replay(private val processor: GnssIntegrityProcessor, fixes: List
         appendLine("|---|---|---|")
         integrity.forEach { (k, v) -> appendLine("| $k | $v | ${pct(v.toDouble() / total)} |") }
         appendLine()
-        appendLine("Эпизодов тревоги: $alarmEpisodes" + if (hours > 0) " (${"%.1f".format(alarmEpisodes / hours)} в час)" else "")
+        appendLine("Эпизодов тревоги без гистерезиса: $alarmEpisodes" + if (hours > 0) " (${"%.1f".format(alarmEpisodes / hours)} в час)" else "")
+        appendLine()
+        appendLine("Эпизодов тревоги с гистерезисом (как в приложении): $filteredEpisodes" + (if (hours > 0) " (${"%.1f".format(filteredEpisodes / hours)} в час)" else "") + ", эпох с тревогой: ${pct(filteredAlarmEpochs.toDouble() / total)}")
         appendLine()
         appendLine("| Детектор | Эпох с тревогой | Пример |")
         appendLine("|---|---|---|")

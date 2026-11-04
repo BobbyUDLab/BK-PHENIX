@@ -61,6 +61,7 @@ public class GnssIntegrityProcessor(
                 IntegrityState.OK,
                 listOf("RAIM исключил: " + raimResult.excluded.joinToString { it.sat.label }),
             )
+            RaimStatus.DEGRADED -> IntegrityReport(IntegrityState.SUSPICIOUS, listOf(raimResult.status.description))
             RaimStatus.OK, RaimStatus.UNAVAILABLE -> IntegrityReport.OK
         }
         return GnssIntegrityResult(

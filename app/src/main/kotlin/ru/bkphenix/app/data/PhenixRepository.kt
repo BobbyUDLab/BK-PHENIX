@@ -283,6 +283,7 @@ class PhenixRepository(
         )
         _solution.value = solution
         deadReckoning.onSolution(solution.point, solution.accuracyM, solution.integrity.state, rt)
+        solution.point?.let { updateDeclination(it, now) }
         if (logRecorder.isRecording) {
             logRecorder.json(
                 "epoch",
@@ -300,6 +301,18 @@ class PhenixRepository(
         }
     }
 
+    /** Склонение по модели WMM; пересчёт при смещении больше [DECLINATION_REFRESH_M]. */
+    private fun updateDeclination(p: ru.bkphenix.core.geo.GeoPoint, now: Long) {
+        val last = declinationAt
+        if (last != null && last.distanceTo(p) < DECLINATION_REFRESH_M) return
+        declinationAt = p
+        deadReckoning.declinationDeg = android.hardware.GeomagneticField(
+            p.latitude.toFloat(), p.longitude.toFloat(), (p.altitude ?: 0.0).toFloat(), now,
+        ).declination.toDouble()
+    }
+
+    private var declinationAt: ru.bkphenix.core.geo.GeoPoint? = null
+
     private fun <T> CoroutineScope.collectSafely(flow: Flow<T>, action: suspend (T) -> Unit) {
         launch {
             flow.catch { Log.w(TAG, "Источник остановлен с ошибкой", it) }.collect { action(it) }
@@ -313,5 +326,6 @@ class PhenixRepository(
         const val RINEX_REFRESH_MILLIS = 2 * 3600_000L
         const val RINEX_RETRY_MILLIS = 10 * 60_000L
         const val GNSS_TIME_UNCERTAINTY_MS = 1_000L
+        const val DECLINATION_REFRESH_M = 10_000.0
     }
 }

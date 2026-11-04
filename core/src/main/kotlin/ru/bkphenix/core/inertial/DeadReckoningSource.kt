@@ -22,6 +22,11 @@ public class DeadReckoningSource(private val navigator: InertialNavigator = Iner
         @Synchronized get() = navigator.mode
         @Synchronized set(value) { navigator.mode = value }
 
+    /** Магнитное склонение в месте нахождения, градусы (восток положителен). */
+    public var declinationDeg: Double
+        @Synchronized get() = navigator.declinationDeg
+        @Synchronized set(value) { navigator.declinationDeg = value }
+
     @Synchronized
     public fun onImu(sample: ImuSample): Unit = navigator.onImu(sample)
 

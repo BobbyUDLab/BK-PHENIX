@@ -4,3 +4,4 @@
 *.jpg binary
 *.png binary
 *.webp binary
+app/src/main/assets/cells/*.bin.gz filter=lfs diff=lfs merge=lfs -text

@@ -58,7 +58,7 @@ fun CoordinateScreen(viewModel: CoordinateViewModel, locationGranted: Boolean, o
                 Button(onClick = onRequestPermissions) { Text(stringResource(R.string.permission_grant)) }
             }
         }
-        solution?.anchor?.takeIf { it.freshness == AnchorFreshness.CAN_UPDATE || it.freshness == AnchorFreshness.MUST_UPDATE }?.let { a ->
+        solution?.anchor?.takeIf { it.freshness == AnchorFreshness.MUST_UPDATE || (it.freshness == AnchorFreshness.CAN_UPDATE && it.anchor?.isAuto != true) }?.let { a ->
             // Заметная плашка без звука: якорь пора подтвердить заново.
             val must = a.freshness == AnchorFreshness.MUST_UPDATE
             SectionCard(a.freshness!!.label) {
@@ -98,6 +98,15 @@ fun CoordinateScreen(viewModel: CoordinateViewModel, locationGranted: Boolean, o
         SectionCard(stringResource(R.string.label_anchor)) {
             val anchor = solution?.anchor
             InfoRow(stringResource(R.string.label_state), anchor?.state?.let { stringResource(it.label()) })
+            anchor?.anchor?.takeIf { it.isAuto }?.let {
+                // Автоякорь поставлен без участия человека — это видно сразу.
+                val hhmm = java.text.SimpleDateFormat("HH:mm", java.util.Locale.ROOT).format(java.util.Date(it.timestampMillis))
+                InfoRow("Тип", "автоякорь, $hhmm, по: ${it.basis ?: "источники"}", Warn)
+                anchor.lastHumanAnchor?.let { h ->
+                    val t = java.text.SimpleDateFormat("HH:mm", java.util.Locale.ROOT).format(java.util.Date(h.timestampMillis))
+                    InfoRow("Ручной якорь", "$t, ${h.point.latitude.fmt(5)}, ${h.point.longitude.fmt(5)}")
+                }
+            }
             anchor?.anchor?.let {
                 InfoRow(stringResource(R.string.label_anchor_point), "${it.point.latitude.fmt(6)}, ${it.point.longitude.fmt(6)}")
             }

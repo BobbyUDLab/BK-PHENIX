@@ -171,7 +171,7 @@ class PhenixRepository(
     /** Режим счисления (пешком/авто); задаётся с карты. */
     var motionMode: MotionMode
         get() = deadReckoning.mode
-        set(value) { deadReckoning.mode = value }
+        set(value) { deadReckoning.mode = value; core.anchorManager.motionMode = value }
 
     /** Текущая оценка счисления пути или null. */
     fun deadReckoningEstimate(): InertialEstimate? = deadReckoning.estimate(realtime())

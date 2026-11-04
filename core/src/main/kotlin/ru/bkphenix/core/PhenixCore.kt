@@ -93,17 +93,24 @@ public class PhenixCore(
             integrity = IntegrityReport.merge(listOf(integrity, if (nitz) gnss.report else filtered))
         }
         integrity = IntegrityReport.merge(listOf(integrity, continuityResult.report))
-        val anchor = anchorManager.evaluate(unanchored.estimate, unanchored.accuracyM, nowMillis, unanchored.hasQuorum)
+        val spoof = integrity.state == IntegrityState.SPOOFING_SUSPECTED
+        val anchor = anchorManager.evaluate(
+            unanchored.estimate, unanchored.accuracyM, nowMillis, unanchored.hasQuorum, spoof,
+            unanchored.accepted.map { it.source.displayName }.distinct().joinToString(", "),
+        )
         if (anchor.state == AnchorState.ANCHOR_CONFLICT) {
             integrity = IntegrityReport.merge(
                 listOf(integrity, IntegrityReport(IntegrityState.SPOOFING_SUSPECTED, listOf(anchor.message))),
             )
         }
         // Позиция не пропадает молча: без других источников — положение по якорю с накопленной σ.
-        val usesAnchorFallback = comparison.estimate == null && anchor.anchor != null
+        // Якорь никогда не останавливает навигацию: если с ним все отсеяны, берём решение без якоря.
+        val est = comparison.estimate ?: unanchored.estimate
+        val estAcc = comparison.accuracyM ?: unanchored.accuracyM
+        val usesAnchorFallback = est == null && anchor.anchor != null
         return PhenixSolution(
-            point = if (usesAnchorFallback) anchor.propagatedPoint ?: anchor.anchor?.point else comparison.estimate,
-            accuracyM = if (usesAnchorFallback) anchor.propagatedSigmaM ?: anchor.anchor?.accuracyM else comparison.accuracyM,
+            point = if (usesAnchorFallback) anchor.propagatedPoint ?: anchor.anchor?.point else est,
+            accuracyM = if (usesAnchorFallback) anchor.propagatedSigmaM ?: anchor.anchor?.accuracyM else estAcc,
             integrity = integrity,
             anchor = anchor,
             comparison = comparison,

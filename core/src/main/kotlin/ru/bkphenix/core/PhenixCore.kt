@@ -12,6 +12,7 @@ import ru.bkphenix.core.gnss.NavigationSubframe
 import ru.bkphenix.core.gnss.RawGnssEpoch
 import ru.bkphenix.core.integrity.CompositeIntegrityEngine
 import ru.bkphenix.core.integrity.ConsistencyIntegrityEngine
+import ru.bkphenix.core.integrity.ContinuityMonitor
 import ru.bkphenix.core.integrity.HammingIntegrityEngine
 import ru.bkphenix.core.integrity.IntegrityContext
 import ru.bkphenix.core.integrity.IntegrityEngine
@@ -34,7 +35,7 @@ public data class PhenixSolution(
 )
 
 /**
- * Единый контур доверия: RAIM и детекторы подмены по сырым измерениям → компаратор → контроль
+ * Единый контур доверия: RAIM и детекторы подмены по сырым измерениям → контроль непрерывности → компаратор → контроль
  * целостности → проверка якорем. Собственное решение WLS идёт в компаратор как источник
  * [PositionSource.GNSS_WLS] той же группы, что и чип ([ru.bkphenix.core.model.SourceGroup.GNSS_SIGNAL]):
  * оно уточняет GNSS-голос, но никогда не считается независимым подтверждением чипа.
@@ -46,6 +47,7 @@ public class PhenixCore(
     ),
     public val anchorManager: AnchorManager = AnchorManager(),
     public val gnssProcessor: GnssIntegrityProcessor = GnssIntegrityProcessor(),
+    public val continuity: ContinuityMonitor = ContinuityMonitor(),
 ) {
     public fun solve(
         observations: List<PositionObservation>,
@@ -61,13 +63,17 @@ public class PhenixCore(
         val wls = gnss?.ownSolution?.let {
             PositionObservation(PositionSource.GNSS_WLS, it.point, it.horizontalSigmaM.coerceAtLeast(MIN_WLS_SIGMA_M), nowMillis)
         }
-        val comparison = comparator.compare(observations + listOfNotNull(wls))
+        // Кинематика и непрерывность: скачок GNSS отсекается до компаратора.
+        val continuityResult = continuity.check(observations + listOfNotNull(wls), nowMillis)
+        val compared = comparator.compare(continuityResult.kept)
+        val comparison = compared.copy(rejected = compared.rejected + continuityResult.dropped)
         // При сырых данных время сверяет детектор NITZ с подробностями; общий движок его не дублирует.
         val timeForEngine = if (gnss != null) emptyList() else timeObservations
         var integrity = integrityEngine.evaluate(
             IntegrityContext(observations, comparison, words, timeForEngine),
         )
         if (gnss != null) integrity = IntegrityReport.merge(listOf(integrity, gnss.report))
+        integrity = IntegrityReport.merge(listOf(integrity, continuityResult.report))
         val anchor = anchorManager.evaluate(comparison.estimate, comparison.accuracyM, nowMillis)
         if (anchor.state == AnchorState.ANCHOR_CONFLICT) {
             integrity = IntegrityReport.merge(

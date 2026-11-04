@@ -1,0 +1,85 @@
+package ru.bkphenix.core.integrity
+
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
+import ru.bkphenix.core.PhenixCore
+import ru.bkphenix.core.geo.GeoPoint
+import ru.bkphenix.core.model.PositionObservation
+import ru.bkphenix.core.model.PositionSource
+import java.util.Random
+import kotlin.math.sin
+
+class ContinuityTest {
+    private val start = GeoPoint(55.75, 37.62)
+    private val rnd = Random(7)
+
+    private fun noisy(p: GeoPoint, sigma: Double): GeoPoint =
+        p.offset(kotlin.math.abs(rnd.nextGaussian() * sigma * 1.0), rnd.nextDouble() * 360.0)
+
+    /** Машина 150 км/ч с плавными поворотами: позиция на секунду t. */
+    private fun car(t: Int): GeoPoint {
+        var p = start
+        for (i in 0 until t) p = p.offset(41.7, 90.0 + 40.0 * sin(i / 30.0))
+        return p
+    }
+
+    @Test
+    fun `честная машина 150 км в ч с шумом — без ложных тревог`() {
+        val m = ContinuityMonitor()
+        var truth = start
+        repeat(600) { t ->
+            truth = truth.offset(41.7, 90.0 + 40.0 * sin(t / 30.0))
+            val r = m.check(listOf(PositionObservation(PositionSource.GNSS, noisy(truth, 5.0), 5.0, 0)), t * 1000L)
+            assertEquals(IntegrityState.OK, r.report.state, "t=$t χ²=${r.innovationChi2}")
+        }
+    }
+
+    @Test
+    fun `честная пешая прогулка с сотой — без ложных тревог`() {
+        val m = ContinuityMonitor()
+        var truth = start
+        repeat(900) { t ->
+            truth = truth.offset(1.4, (t / 60) * 90.0)
+            val obs = listOf(
+                PositionObservation(PositionSource.GNSS, noisy(truth, 4.0), 4.0, 0),
+                PositionObservation(PositionSource.CELL, noisy(truth, 100.0), 100.0, 0),
+            )
+            assertEquals(IntegrityState.OK, m.check(obs, t * 1000L).report.state, "t=$t")
+        }
+    }
+
+    @Test
+    fun `скачок на 500 м отсекается кинематикой`() {
+        val core = PhenixCore()
+        repeat(30) { t -> core.solve(listOf(PositionObservation(PositionSource.GNSS, car(t), 5.0, 0)), t * 1000L) }
+        val jumped = PositionObservation(PositionSource.GNSS, car(30).offset(500.0, 0.0), 5.0, 0)
+        val sol = core.solve(listOf(jumped), 30_000)
+        assertEquals(IntegrityState.SPOOFING_SUSPECTED, sol.integrity.state)
+        assertTrue(jumped in sol.comparison.rejected)
+    }
+
+    @Test
+    fun `плавный увод 2 м в с от соты обнаруживается за 5 минут`() {
+        val m = ContinuityMonitor()
+        var detectedAt = -1
+        for (t in 0 until 600) {
+            val truth = start.offset(1.2 * t, 0.0)
+            val spoofed = truth.offset(2.0 * t, 90.0)
+            val obs = listOf(
+                PositionObservation(PositionSource.GNSS, noisy(spoofed, 4.0), 4.0, 0),
+                PositionObservation(PositionSource.CELL, noisy(truth, 100.0), 100.0, 0),
+            )
+            if (m.check(obs, t * 1000L).report.state == IntegrityState.SPOOFING_SUSPECTED) { detectedAt = t; break }
+        }
+        assertTrue(detectedAt in 1..300, "обнаружено на $detectedAt с")
+    }
+
+    @Test
+    fun `после тоннеля фильтр стартует заново без тревоги`() {
+        val m = ContinuityMonitor()
+        repeat(10) { t -> m.check(listOf(PositionObservation(PositionSource.GNSS, car(t), 5.0, 0)), t * 1000L) }
+        val r = m.check(listOf(PositionObservation(PositionSource.GNSS, car(70), 5.0, 0)), 70_000)
+        assertEquals(IntegrityState.OK, r.report.state)
+    }
+}

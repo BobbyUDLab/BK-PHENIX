@@ -28,6 +28,9 @@ import ru.bkphenix.app.data.model.MeasurementSummary
 import ru.bkphenix.app.data.model.NetworkTimeSample
 import ru.bkphenix.app.data.model.SensorKind
 import ru.bkphenix.app.data.model.SensorSnapshot
+import ru.bkphenix.core.inertial.DeadReckoningSource
+import ru.bkphenix.core.inertial.InertialEstimate
+import ru.bkphenix.core.track.MotionMode
 import ru.bkphenix.app.data.model.SourceStatus
 import ru.bkphenix.app.data.model.WifiSnapshot
 import ru.bkphenix.app.data.source.BleDataSource
@@ -78,6 +81,8 @@ class PhenixRepository(
     private val rinex: RinexEphemerisSource,
     cellTowers: CellTowerDatabase = EmptyCellTowerDatabase,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** Монотонное время в мс в базе ИИБ (elapsedRealtime). */
+    private val realtime: () -> Long = android.os.SystemClock::elapsedRealtime,
 ) {
     /** Ядро не потокобезопасно: все обращения — через один поток. */
     private val coreDispatcher = Dispatchers.Default.limitedParallelism(1)
@@ -115,6 +120,17 @@ class PhenixRepository(
     private val _ble = MutableStateFlow<List<BleSnapshot>>(emptyList())
     val bleList: StateFlow<List<BleSnapshot>> = _ble.asStateFlow()
     private val _sensors = MutableStateFlow<Map<SensorKind, SensorSnapshot>>(emptyMap())
+    /** Счисление пути по ИИБ: источник компаратора и позиция карты при пропадании ГНСС. */
+    private val deadReckoning = DeadReckoningSource()
+
+    /** Режим счисления (пешком/авто); задаётся с карты. */
+    var motionMode: MotionMode
+        get() = deadReckoning.mode
+        set(value) { deadReckoning.mode = value }
+
+    /** Текущая оценка счисления пути или null. */
+    fun deadReckoningEstimate(): InertialEstimate? = deadReckoning.estimate(realtime())
+
     val sensorReadings: StateFlow<Map<SensorKind, SensorSnapshot>> = _sensors.asStateFlow()
     private val _networkTime = MutableStateFlow<NetworkTimeSample?>(null)
     val networkTime: StateFlow<NetworkTimeSample?> = _networkTime.asStateFlow()
@@ -195,6 +211,7 @@ class PhenixRepository(
             collectSafely(wifi.scans()) { _wifi.value = it }
             collectSafely(ble.beacons()) { _ble.value = it }
             collectSafely(sensors.readings()) { s -> _sensors.update { it + (s.kind to s) } }
+            collectSafely(sensors.imu()) { deadReckoning.onImu(it) }
             collectSafely(networkTimeSource.samples()) {
                 networkTimeSample = it
                 _networkTime.value = it
@@ -254,6 +271,9 @@ class PhenixRepository(
         }
         val subframes = pendingSubframes.toList().also { pendingSubframes.clear() }
         val raw = pendingRaw.also { pendingRaw = null }
+        // Прогноз счисления берём до учёта решения этой эпохи, чтобы он проверял его независимо.
+        val rt = realtime()
+        deadReckoning.observation(rt, now)?.let(aggregator::put)
         val solution = core.solve(
             observations = aggregator.fresh(now),
             nowMillis = now,
@@ -262,6 +282,7 @@ class PhenixRepository(
             navigationSubframes = subframes,
         )
         _solution.value = solution
+        deadReckoning.onSolution(solution.point, solution.accuracyM, solution.integrity.state, rt)
         if (logRecorder.isRecording) {
             logRecorder.json(
                 "epoch",

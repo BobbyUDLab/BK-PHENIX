@@ -24,6 +24,8 @@ public data class HeldPosition(
     val bearingDeg: Double?,
     /** true — позиция экстраполирована по скорости, свежего решения нет. */
     val extrapolated: Boolean,
+    /** true — позиция получена инерциальным счислением пути (ИИБ), а не по последней скорости. */
+    val deadReckoning: Boolean = false,
 )
 
 /**

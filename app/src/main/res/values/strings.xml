@@ -61,6 +61,15 @@
     <string name="map_held">удержание по скорости</string>
     <string name="map_dead_reckoning">счисление по датчикам</string>
     <string name="map_roads_import">Дороги</string>
+    <string name="map_terrain_import">Рельеф</string>
+    <string name="map_terrain_reimport">Сменить рельеф</string>
+    <string name="map_terrain_missing">Проверка высоты: импортируйте BK-PHENIX-dem-moscow.bin.gz</string>
+    <string name="map_terrain_loading">Загрузка рельефа…</string>
+    <string name="map_height_prefix">Высота над геоидом:</string>
+    <string name="map_height_gnss">ГНСС %1$s м</string>
+    <string name="map_height_baro">барометр %1$s м (%2$s)</string>
+    <string name="map_height_terrain">рельеф %1$s м</string>
+    <string name="map_height_residual">расхождение %1$s м (порог %2$s)</string>
     <string name="map_roads_reimport">Сменить дороги</string>
     <string name="map_roads_missing">Привязка к дорогам: импортируйте BK-PHENIX-roads-moscow.bin.gz</string>
     <string name="map_roads_loading">Загрузка дорожного графа…</string>

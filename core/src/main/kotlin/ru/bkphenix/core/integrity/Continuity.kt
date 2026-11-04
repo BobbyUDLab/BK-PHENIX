@@ -30,6 +30,8 @@ public data class ContinuityConfig(
     /** CUSUM: допуск k и порог h по нормированному расхождению. */
     val cusumK: Double = 1.5,
     val cusumH: Double = 15.0,
+    /** Нижняя граница σ независимой оценки в CUSUM, м: заявленные точности сети оптимистичны. */
+    val cusumMinIndependentSigmaM: Double = 20.0,
     /** Сколько держать тревогу после скачка, мс. */
     val holdMillis: Long = 60_000,
     /** Перерыв GNSS, после которого фильтр стартует заново (тоннель), мс. */
@@ -134,7 +136,11 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
                     clearStreak()
                 }
             }
-            if (dropped.isEmpty() && independent.isNotEmpty()) updateCusum(gnss, independent)
+            // CUSUM — только по абсолютным источникам, не связанным с GNSS: счисление дрейфует и
+            // стартует от той же позиции, а «Сеть» платформы может подмешивать GNSS. На полевом
+            // тесте 04.11 они давали ложный «плавный увод» почти всю прогулку.
+            val absolute = independent.filter { !it.source.mayUseGnss && SourceGroup.INERTIAL !in it.origin }
+            if (dropped.isEmpty() && absolute.isNotEmpty()) updateCusum(gnss, absolute)
         }
         if (nowMillis <= alarmUntil) alarmReason?.let { reasons += it }
         val report = if (reasons.isEmpty()) IntegrityReport.OK else IntegrityReport(IntegrityState.SPOOFING_SUSPECTED, reasons)
@@ -169,7 +175,7 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
         val w = independent.sumOf { it.weight }
         val lat = independent.sumOf { it.point.latitude * it.weight } / w
         val lon = independent.sumOf { it.point.longitude * it.weight } / w
-        val sigmaI = 1.0 / sqrt(w)
+        val sigmaI = max(1.0 / sqrt(w), config.cusumMinIndependentSigmaM)
         val z = gnss.point.distanceTo(GeoPoint(lat, lon)) / sqrt(gnss.accuracyM * gnss.accuracyM + sigmaI * sigmaI)
         cusum = max(0.0, cusum + z - config.cusumK)
         if (cusum > config.cusumH) {

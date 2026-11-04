@@ -55,12 +55,21 @@ public class PositionComparator(
         require(gateSigma > 0.0)
     }
 
-    public fun compare(observations: List<PositionObservation>): ComparisonResult {
-        if (observations.isEmpty()) return ComparisonResult(null, null, emptyList(), emptyList())
+    /**
+     * @param priority подтверждённый якорь: если задан, он обязательно входит в итоговое подмножество
+     *   и решает спор между группами — всё, что с ним не согласуется, отсекается.
+     */
+    public fun compare(
+        observations: List<PositionObservation>,
+        priority: PositionObservation? = null,
+    ): ComparisonResult {
+        if (observations.isEmpty() && priority == null) return ComparisonResult(null, null, emptyList(), emptyList())
 
-        val candidates = observations.sortedBy { it.accuracyM }.take(MAX_OBSERVATIONS)
-        val overflow = observations.sortedBy { it.accuracyM }.drop(MAX_OBSERVATIONS)
-        val best = largestConsistentSubset(candidates)
+        val sorted = observations.sortedBy { it.accuracyM }
+        val room = if (priority != null) MAX_OBSERVATIONS - 1 else MAX_OBSERVATIONS
+        val candidates = listOfNotNull(priority) + sorted.take(room)
+        val overflow = sorted.drop(room)
+        val best = largestConsistentSubset(candidates, required = if (priority != null) 0 else null)
         val accepted = best.map { candidates[it] }
         val rejected = candidates.filterIndexed { i, _ -> i !in best } + overflow
 
@@ -86,13 +95,15 @@ public class PositionComparator(
         return a.point.distanceTo(b.point) <= gate
     }
 
-    private fun largestConsistentSubset(obs: List<PositionObservation>): Set<Int> {
+    private fun largestConsistentSubset(obs: List<PositionObservation>, required: Int?): Set<Int> {
         val n = obs.size
         val compatible = Array(n) { i -> BooleanArray(n) { j -> i == j || areConsistent(obs[i], obs[j]) } }
-        var bestMask = 1
+        val start = required ?: 0
+        var bestMask = 1 shl start
         var bestVotes = 1
-        var bestWeight = obs[0].effectiveWeight
+        var bestWeight = obs[start].effectiveWeight
         for (mask in 1 until (1 shl n)) {
+            if (required != null && mask and (1 shl required) == 0) continue
             val members = (0 until n).filter { mask and (1 shl it) != 0 }
             val clique = members.all { i -> members.all { j -> compatible[i][j] } }
             if (!clique) continue

@@ -65,7 +65,10 @@ public class PhenixCore(
         }
         // Кинематика и непрерывность: скачок GNSS отсекается до компаратора.
         val continuityResult = continuity.check(observations + listOfNotNull(wls), nowMillis)
-        val compared = comparator.compare(continuityResult.kept)
+        // Якорь проверяется против решения без него, а в итоговом решении он решает спор групп.
+        val unanchored = comparator.compare(continuityResult.kept)
+        val anchorObs = anchorManager.observation(nowMillis)
+        val compared = if (anchorObs != null) comparator.compare(continuityResult.kept, priority = anchorObs) else unanchored
         val comparison = compared.copy(rejected = compared.rejected + continuityResult.dropped)
         // При сырых данных время сверяет детектор NITZ с подробностями; общий движок его не дублирует.
         val timeForEngine = if (gnss != null) emptyList() else timeObservations
@@ -74,7 +77,7 @@ public class PhenixCore(
         )
         if (gnss != null) integrity = IntegrityReport.merge(listOf(integrity, gnss.report))
         integrity = IntegrityReport.merge(listOf(integrity, continuityResult.report))
-        val anchor = anchorManager.evaluate(comparison.estimate, comparison.accuracyM, nowMillis)
+        val anchor = anchorManager.evaluate(unanchored.estimate, unanchored.accuracyM, nowMillis)
         if (anchor.state == AnchorState.ANCHOR_CONFLICT) {
             integrity = IntegrityReport.merge(
                 listOf(integrity, IntegrityReport(IntegrityState.SPOOFING_SUSPECTED, listOf(anchor.message))),

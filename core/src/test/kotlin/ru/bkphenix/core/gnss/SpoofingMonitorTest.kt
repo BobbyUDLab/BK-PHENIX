@@ -54,16 +54,26 @@ class SpoofingMonitorTest {
     fun `скачок часов приёмника на 5 мкс — тревога, плавный дрейф — нет`() {
         val m = SpoofingMonitor()
         val base = s.epoch()
-        fun at(sec: Int, extraNs: Long) = base.copy(
+        // Подмена времени: шкала приёмника и времена излучения сдвинуты согласованно — дальности не меняются,
+        // смещение часов МНК не поглощает скачок.
+        fun at(sec: Int, extraNs: Long, spoofed: Boolean = true) = base.copy(
             clock = base.clock.copy(
                 timeNanos = base.clock.timeNanos + sec * 1_000_000_000L,
                 fullBiasNanos = base.clock.fullBiasNanos!! + sec * 100L + extraNs,
                 driftNanosPerSecond = 100.0,
             ),
+            measurements = base.measurements.map {
+                it.copy(receivedSvTimeNanos = it.receivedSvTimeNanos + sec * 1_000_000_000L + sec * 100L - if (spoofed) extraNs else 0L)
+            },
         )
         assertEquals(DetectorVerdict.NOT_APPLICABLE, m.clockJump(input(at(0, 0))).verdict)
         assertEquals(DetectorVerdict.PASS, m.clockJump(input(at(1, 0))).verdict)
         assertEquals(DetectorVerdict.ALERT, m.clockJump(input(at(2, 5_000))).verdict)
+        // Переоценка FullBias чипом (Kirin): дальности сдвинулись одинаково, МНК поглотил — не подмена.
+        val chip = SpoofingMonitor()
+        chip.clockJump(input(at(0, 0)))
+        chip.clockJump(input(at(1, 0)))
+        assertEquals(DetectorVerdict.PASS, chip.clockJump(input(at(2, 5_000, spoofed = false))).verdict)
         val reset = at(3, 5_000).let { it.copy(clock = it.clock.copy(hardwareClockDiscontinuityCount = 1)) }
         assertEquals(DetectorVerdict.NOT_APPLICABLE, m.clockJump(input(reset)).verdict)
     }

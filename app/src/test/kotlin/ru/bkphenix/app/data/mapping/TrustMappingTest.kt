@@ -25,4 +25,18 @@ class TrustMappingTest {
         assertEquals(TrustLevel.REJECTED, trust.getValue(PositionSource.GNSS).level)
         assertEquals(TrustLevel.HIGH, trust.getValue(PositionSource.NETWORK).level)
     }
+
+    @Test
+    fun `в доверии видна группа источника и число независимых голосов`() {
+        val solution = PhenixCore().solve(
+            listOf(
+                PositionObservation(PositionSource.NETWORK, p, 20.0, 0),
+                PositionObservation(PositionSource.CELL, p.offset(10.0, 0.0), 150.0, 0),
+            ),
+            0,
+        )
+        val trust = TrustMapping.fromSolution(solution).associateBy { it.source }
+        assertEquals("Сотовая сеть + Wi-Fi", trust.getValue(PositionSource.NETWORK).groupsLabel)
+        assertEquals(1, solution.comparison.independentConfirmations)
+    }
 }

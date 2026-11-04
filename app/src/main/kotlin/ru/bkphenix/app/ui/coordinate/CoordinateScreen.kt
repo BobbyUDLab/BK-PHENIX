@@ -90,10 +90,15 @@ fun CoordinateScreen(viewModel: CoordinateViewModel, locationGranted: Boolean, o
         }
         SectionCard(stringResource(R.string.label_sources)) {
             if (state.trust.isEmpty()) EmptyHint(stringResource(R.string.no_sources))
+            state.solution?.let { sol ->
+                val n = sol.comparison.independentConfirmations
+                InfoRow(stringResource(R.string.label_independent), n.toString(), if (n >= 2) Ok else Warn)
+            }
             state.trust.forEach { t ->
                 InfoRow(
                     t.source.displayName,
-                    "${t.level.displayName} · σ ${t.accuracyM.fmt(0)} м" + (t.deviationM?.let { " · Δ ${it.fmt(0)} м" } ?: ""),
+                    "${t.level.displayName} · σ ${t.accuracyM.fmt(0)} м" + (t.deviationM?.let { " · Δ ${it.fmt(0)} м" } ?: "") +
+                        "\n${t.groupsLabel}",
                     t.level.color(),
                 )
             }

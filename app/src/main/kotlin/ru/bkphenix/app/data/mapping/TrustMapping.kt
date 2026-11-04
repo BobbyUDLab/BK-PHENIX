@@ -2,6 +2,7 @@ package ru.bkphenix.app.data.mapping
 
 import ru.bkphenix.core.PhenixSolution
 import ru.bkphenix.core.model.PositionSource
+import ru.bkphenix.core.model.SourceGroup
 import kotlin.math.sqrt
 
 /** Уровень доверия к источнику в текущей эпохе. */
@@ -13,7 +14,11 @@ data class SourceTrust(
     /** Отклонение от итоговой точки, метры. */
     val deviationM: Double?,
     val level: TrustLevel,
-)
+    /** Группы зависимости (происхождение) наблюдения. */
+    val groups: Set<SourceGroup> = source.defaultOrigin,
+) {
+    val groupsLabel: String get() = groups.sortedBy { it.ordinal }.joinToString(" + ") { it.displayName }
+}
 
 object TrustMapping {
     /**
@@ -32,10 +37,10 @@ object TrustMapping {
                 z < 2.0 -> TrustLevel.MEDIUM
                 else -> TrustLevel.LOW
             }
-            SourceTrust(obs.source, obs.accuracyM, d, level)
+            SourceTrust(obs.source, obs.accuracyM, d, level, obs.origin)
         }
         val rejected = solution.comparison.rejected.map { obs ->
-            SourceTrust(obs.source, obs.accuracyM, estimate?.let { obs.point.distanceTo(it) }, TrustLevel.REJECTED)
+            SourceTrust(obs.source, obs.accuracyM, estimate?.let { obs.point.distanceTo(it) }, TrustLevel.REJECTED, obs.origin)
         }
         return (accepted + rejected).sortedBy { it.level.ordinal }
     }

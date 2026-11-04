@@ -2,6 +2,7 @@ package ru.bkphenix.core.integrity
 
 import ru.bkphenix.core.compare.ComparisonResult
 import ru.bkphenix.core.model.PositionObservation
+import ru.bkphenix.core.model.SourceGroup
 import ru.bkphenix.core.model.TimeObservation
 import ru.bkphenix.core.model.TimeSource
 import ru.bkphenix.core.model.isTimeConsistent
@@ -54,10 +55,17 @@ public class ConsistencyIntegrityEngine : IntegrityEngine {
             reports += IntegrityReport(IntegrityState.GNSS_LOST, listOf("Нет решения ГНСС при наличии других источников"))
         }
         val rejectedGnss = context.comparison.rejected.filter { it.source.isSatellite }
-        if (rejectedGnss.isNotEmpty()) {
+        // Подменой считаем только спор с независимым свидетелем; расхождение чипа и WLS — внутри одной группы.
+        val independentWitness = context.comparison.accepted.any { SourceGroup.GNSS_SIGNAL !in it.origin }
+        if (rejectedGnss.isNotEmpty() && independentWitness) {
             reports += IntegrityReport(
                 IntegrityState.SPOOFING_SUSPECTED,
                 listOf("Решение ГНСС не согласуется с независимыми источниками"),
+            )
+        } else if (rejectedGnss.isNotEmpty()) {
+            reports += IntegrityReport(
+                IntegrityState.INCONSISTENT,
+                listOf("Решения ГНСС расходятся между собой: " + rejectedGnss.joinToString { it.source.displayName }),
             )
         }
         val others = context.comparison.rejected.filterNot { it.source.isSatellite }

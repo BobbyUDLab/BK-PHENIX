@@ -93,11 +93,13 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
 
     public fun check(observations: List<PositionObservation>, nowMillis: Long): ContinuityResult {
         val gnssGroup = observations.filter { SourceGroup.GNSS_SIGNAL in it.origin }
-        // Свидетели против GNSS — только источники, не зависящие от неё ни прямо, ни косвенно:
-        // сеть/Fused платформы и счисление от фикса GNSS при подмене уводятся вместе с ней.
-        val independent = observations.filter { it.isGnssIndependent }
         val reasons = mutableListOf<String>()
         val gnss = gnssGroup.minByOrNull { it.accuracyM }
+        // Только свежие и действительно независимые от GNSS наблюдения могут блокировать её восстановление.
+        // Сетевой провайдер может повторять GNSS, поэтому его конфликт сам по себе не является вето.
+        val independent = if (gnss == null) emptyList() else observations.filter {
+            it.isGnssIndependent && isFreshWitness(it, gnss)
+        }
         var dropped = emptyList<PositionObservation>()
         var chi2: Double? = null
 
@@ -118,6 +120,10 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
                 }
             } else if (o == null || gapReset) {
                 init(gnss, nowMillis)
+                if (independent.isEmpty() && hasConflictingNetworkFix(gnss, observations)) {
+                    // Возврат GNSS принимаем, но явно помечаем как неподтверждённый: сеть не может сама себя подтвердить.
+                    unconfirmed = true
+                }
             } else {
                 val dt = (nowMillis - lastMillis) / 1000.0
                 val (e, n) = enu(o, gnss.point)
@@ -210,22 +216,30 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
         val reach = config.maxSpeedMps * gapS + 3 * (gnss.accuracyM + sqrt(p[0][0]))
         val jump = gnss.point.distanceTo(last)
         if (jump > reach) return "Невозможный скачок GNSS после перерыва ${gapS.toInt()} с: ${jump.toInt()} м (достижимо ${reach.toInt()} м)"
-        val others = observations.filter { isOtherWitness(it, gnss) }
-        if (others.isNotEmpty() && others.none { closeTo(gnss, it) }) {
-            val d = others.minOf { gnss.point.distanceTo(it.point) }
-            return "GNSS после перерыва в ${d.toInt()} м от других источников"
+        val witnesses = observations.filter { isRecoveryWitness(it, gnss) }
+        if (witnesses.isNotEmpty() && witnesses.none { closeTo(gnss, it) }) {
+            val d = witnesses.minOf { gnss.point.distanceTo(it.point) }
+            return "GNSS после перерыва в ${d.toInt()} м от независимых источников"
         }
         return null
     }
 
-    /** Хоть один другой источник (включая сеть) далеко — восстанавливаться на GNSS нельзя. */
+    /** Свежий независимый источник далеко — восстановление GNSS блокируется. */
     private fun contradicted(gnss: PositionObservation, observations: List<PositionObservation>) =
-        observations.any { isOtherWitness(it, gnss) && !closeTo(gnss, it) }
+        observations.any { isRecoveryWitness(it, gnss) && !closeTo(gnss, it) }
 
-    /** Свидетель — не-GNSS источник или сеть не старше 2 мин; допуск растёт на макс. скорость × возраст свидетеля. */
-    private fun isOtherWitness(o: PositionObservation, gnss: PositionObservation) =
-        (SourceGroup.GNSS_SIGNAL !in o.origin || o.source == PositionSource.NETWORK) &&
-            gnss.timestampMillis - o.timestampMillis <= WITNESS_MAX_AGE_MILLIS
+    private fun hasConflictingNetworkFix(gnss: PositionObservation, observations: List<PositionObservation>) =
+        observations.any {
+            it.source == PositionSource.NETWORK && isFreshWitness(it, gnss) && !closeTo(gnss, it)
+        }
+
+    /** Возраст свидетеля не более 2 мин; допуск согласия растёт на макс. скорость × возраст. */
+    private fun isFreshWitness(o: PositionObservation, gnss: PositionObservation) =
+        gnss.timestampMillis - o.timestampMillis <= WITNESS_MAX_AGE_MILLIS
+
+    /** Сетевой/Fused источник может зависеть от GNSS, поэтому не блокирует её восстановление. */
+    private fun isRecoveryWitness(o: PositionObservation, gnss: PositionObservation) =
+        o.isGnssIndependent && isFreshWitness(o, gnss)
 
     private fun closeTo(gnss: PositionObservation, o: PositionObservation) =
         gnss.point.distanceTo(o.point) <= config.recoveryAgreementM + 3 * (gnss.accuracyM + o.accuracyM) +

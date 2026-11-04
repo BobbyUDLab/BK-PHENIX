@@ -45,6 +45,9 @@ import org.maplibre.android.maps.Style
 import ru.bkphenix.app.R
 import ru.bkphenix.app.data.map.MapFileState
 import ru.bkphenix.app.data.roads.RoadGraphState
+import ru.bkphenix.app.data.terrain.TerrainState
+import ru.bkphenix.core.terrain.VerticalCheck
+import kotlin.math.abs
 import ru.bkphenix.app.data.roads.RoadGraphStore
 import ru.bkphenix.core.roads.MapMatcher
 import ru.bkphenix.core.roads.MatchResult
@@ -92,6 +95,11 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
     val recording by viewModel.recording.collectAsStateWithLifecycle()
     val road by viewModel.roadMatch.collectAsStateWithLifecycle()
     val roadGraph by viewModel.roadGraph.collectAsStateWithLifecycle()
+    val terrain by viewModel.terrain.collectAsStateWithLifecycle()
+    val vertical by viewModel.vertical.collectAsStateWithLifecycle()
+    val terrainPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(viewModel::importTerrain)
+    }
     val roadPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(viewModel::importRoads)
     }
@@ -187,6 +195,9 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
+                heightLine(terrain, vertical)?.let { (text, alarm) ->
+                    Text(text, style = MaterialTheme.typography.bodySmall, color = if (alarm) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+                }
                 roadLine(motionMode, roadGraph, road)?.let { (text, alarm) ->
                     Text(text, style = MaterialTheme.typography.bodySmall, color = if (alarm) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
                 }
@@ -212,6 +223,9 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
         }
         // Замена файла карты (новый регион или обновление) — редкое действие, кнопка в углу.
         Column(Modifier.align(Alignment.BottomStart).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SmallFloatingActionButton(onClick = { terrainPicker.launch(arrayOf("*/*")) }) {
+                Text(stringResource(if (terrain is TerrainState.Ready) R.string.map_terrain_reimport else R.string.map_terrain_import), Modifier.padding(8.dp))
+            }
             SmallFloatingActionButton(onClick = { roadPicker.launch(arrayOf("*/*")) }) {
                 Text(stringResource(if (roadGraph is RoadGraphState.Ready) R.string.map_roads_reimport else R.string.map_roads_import), Modifier.padding(8.dp))
             }
@@ -219,6 +233,25 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
                 Text(stringResource(R.string.map_reimport), Modifier.padding(8.dp))
             }
         }
+    }
+}
+
+/** Строка высоты: ГНСС над геоидом, барометр, рельеф и расхождение; true — расхождение выше порога. */
+@Composable
+private fun heightLine(terrain: TerrainState, v: VerticalCheck?): Pair<String, Boolean>? = when (terrain) {
+    is TerrainState.Missing -> stringResource(R.string.map_terrain_missing) to false
+    is TerrainState.Importing -> stringResource(R.string.map_importing, terrain.copiedBytes / (1 shl 20)) to false
+    is TerrainState.Loading -> stringResource(R.string.map_terrain_loading) to false
+    is TerrainState.Failed -> terrain.message to true
+    is TerrainState.Ready -> v?.let {
+        val parts = listOfNotNull(
+            it.gnssOrthometricM?.let { h -> stringResource(R.string.map_height_gnss, h.fmt(0)) },
+            it.barometric?.let { b -> stringResource(R.string.map_height_baro, b.heightM.fmt(0), b.source.displayName) },
+            it.terrainM?.let { h -> stringResource(R.string.map_height_terrain, h.fmt(0)) },
+            it.residualM?.let { r -> stringResource(R.string.map_height_residual, r.fmt(0), it.thresholdM!!.fmt(0)) },
+        )
+        if (parts.isEmpty()) null
+        else (stringResource(R.string.map_height_prefix) + " " + parts.joinToString(" · ")) to (it.residualM != null && abs(it.residualM!!) > it.thresholdM!!)
     }
 }
 

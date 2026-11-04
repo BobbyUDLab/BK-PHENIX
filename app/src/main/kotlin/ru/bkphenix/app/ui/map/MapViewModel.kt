@@ -18,6 +18,9 @@ import ru.bkphenix.app.data.map.MapFileState
 import ru.bkphenix.app.data.map.MapFileStore
 import ru.bkphenix.app.data.roads.RoadGraphState
 import ru.bkphenix.app.data.roads.RoadGraphStore
+import ru.bkphenix.app.data.terrain.TerrainState
+import ru.bkphenix.app.data.terrain.TerrainStore
+import ru.bkphenix.core.terrain.VerticalCheck
 import ru.bkphenix.core.roads.MatchResult
 import ru.bkphenix.app.data.track.TrackRecorder
 import ru.bkphenix.app.data.track.TrackRecordingState
@@ -39,6 +42,7 @@ class MapViewModel(
     private val recorder: TrackRecorder,
     private val mapFiles: MapFileStore,
     private val roadGraphs: RoadGraphStore,
+    private val terrainFiles: TerrainStore,
     private val clock: () -> Long = System::currentTimeMillis,
 ) : ViewModel() {
     val mapFile: StateFlow<MapFileState> = mapFiles.state
@@ -46,6 +50,8 @@ class MapViewModel(
     val recording: StateFlow<TrackRecordingState> = recorder.state
     val roadGraph: StateFlow<RoadGraphState> = roadGraphs.state
     val roadMatch: StateFlow<MatchResult?> = repository.roadMatch
+    val terrain: StateFlow<TerrainState> = terrainFiles.state
+    val vertical: StateFlow<VerticalCheck?> = repository.verticalCheck
 
     private val motion = MotionModel(MotionMode.CAR).also { repository.motionMode = it.mode }
     private val _motionMode = MutableStateFlow(motion.mode)
@@ -100,6 +106,10 @@ class MapViewModel(
     fun clearAnchor() = repository.clearAnchor()
 
     fun toggleTrack() = if (recorder.state.value.recording) recorder.stop() else recorder.start()
+
+    fun importTerrain(uri: Uri) {
+        viewModelScope.launch { terrainFiles.import(uri) }
+    }
 
     fun importRoads(uri: Uri) {
         viewModelScope.launch { roadGraphs.import(uri) }

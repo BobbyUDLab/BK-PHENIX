@@ -20,6 +20,19 @@ public data class ComparisonResult(
 
     /** Число независимых подтверждений итога (групп, а не источников). */
     val independentConfirmations: Int get() = votes.size
+
+    /**
+     * Голоса, которым можно верить как независимым: голос, состоящий только из источников,
+     * способных опираться на GNSS ([ru.bkphenix.core.model.PositionSource.mayUseGnss]), не считается.
+     */
+    val strongConfirmations: Int get() = votes.count { v -> v.observations.any { !it.source.mayUseGnss } }
+
+    /** Кворум: итог поддерживают не менее двух сильных независимых групп. */
+    val hasQuorum: Boolean get() = strongConfirmations >= QUORUM
+
+    public companion object {
+        public const val QUORUM: Int = 2
+    }
 }
 
 /**
@@ -42,21 +55,30 @@ public class PositionComparator(
         require(gateSigma > 0.0)
     }
 
-    public fun compare(observations: List<PositionObservation>): ComparisonResult {
-        if (observations.isEmpty()) return ComparisonResult(null, null, emptyList(), emptyList())
+    /**
+     * @param priority подтверждённый якорь: если задан, он обязательно входит в итоговое подмножество
+     *   и решает спор между группами — всё, что с ним не согласуется, отсекается.
+     */
+    public fun compare(
+        observations: List<PositionObservation>,
+        priority: PositionObservation? = null,
+    ): ComparisonResult {
+        if (observations.isEmpty() && priority == null) return ComparisonResult(null, null, emptyList(), emptyList())
 
-        val candidates = observations.sortedBy { it.accuracyM }.take(MAX_OBSERVATIONS)
-        val overflow = observations.sortedBy { it.accuracyM }.drop(MAX_OBSERVATIONS)
-        val best = largestConsistentSubset(candidates)
+        val sorted = observations.sortedBy { it.accuracyM }
+        val room = if (priority != null) MAX_OBSERVATIONS - 1 else MAX_OBSERVATIONS
+        val candidates = listOfNotNull(priority) + sorted.take(room)
+        val overflow = sorted.drop(room)
+        val best = largestConsistentSubset(candidates, required = if (priority != null) 0 else null)
         val accepted = best.map { candidates[it] }
         val rejected = candidates.filterIndexed { i, _ -> i !in best } + overflow
 
         val votes = Independence.votes(accepted)
         val fused = votes.map { v ->
-            val w = v.observations.sumOf { it.weight }
-            val lat = v.observations.sumOf { it.point.latitude * it.weight } / w
-            val lon = v.observations.sumOf { it.point.longitude * it.weight } / w
-            Triple(lat, lon, v.observations.maxOf { it.weight })
+            val w = v.observations.sumOf { it.effectiveWeight }
+            val lat = v.observations.sumOf { it.point.latitude * it.effectiveWeight } / w
+            val lon = v.observations.sumOf { it.point.longitude * it.effectiveWeight } / w
+            Triple(lat, lon, v.observations.maxOf { it.effectiveWeight })
         }
         val totalWeight = fused.sumOf { it.third }
         return ComparisonResult(
@@ -73,19 +95,21 @@ public class PositionComparator(
         return a.point.distanceTo(b.point) <= gate
     }
 
-    private fun largestConsistentSubset(obs: List<PositionObservation>): Set<Int> {
+    private fun largestConsistentSubset(obs: List<PositionObservation>, required: Int?): Set<Int> {
         val n = obs.size
         val compatible = Array(n) { i -> BooleanArray(n) { j -> i == j || areConsistent(obs[i], obs[j]) } }
-        var bestMask = 1
+        val start = required ?: 0
+        var bestMask = 1 shl start
         var bestVotes = 1
-        var bestWeight = obs[0].weight
+        var bestWeight = obs[start].effectiveWeight
         for (mask in 1 until (1 shl n)) {
+            if (required != null && mask and (1 shl required) == 0) continue
             val members = (0 until n).filter { mask and (1 shl it) != 0 }
             val clique = members.all { i -> members.all { j -> compatible[i][j] } }
             if (!clique) continue
             val votes = Independence.count(members.map { obs[it] })
             // Вес — по голосам (лучшее наблюдение голоса), чтобы дубли одной группы не перевешивали.
-            val weight = Independence.votes(members.map { obs[it] }).sumOf { v -> v.observations.maxOf { it.weight } }
+            val weight = Independence.votes(members.map { obs[it] }).sumOf { v -> v.observations.maxOf { it.effectiveWeight } }
             val sameWeight = abs(weight - bestWeight) <= bestWeight * 1e-9
             val better = votes > bestVotes ||
                 (votes == bestVotes && !sameWeight && weight > bestWeight) ||
@@ -106,3 +130,10 @@ public class PositionComparator(
         public const val MAX_OBSERVATIONS: Int = 12
     }
 }
+
+/** Вес в компараторе: источник, который может опираться на GNSS, весит меньше. */
+internal val PositionObservation.effectiveWeight: Double
+    get() = if (source.mayUseGnss) weight * GNSS_ASSISTED_WEIGHT else weight
+
+/** Множитель веса источника, который может опираться на GNSS (эквивалент σ ×2). */
+internal const val GNSS_ASSISTED_WEIGHT: Double = 0.25

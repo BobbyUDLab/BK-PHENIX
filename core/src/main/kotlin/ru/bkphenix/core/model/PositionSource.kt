@@ -68,4 +68,10 @@ public enum class PositionSource(
     ;
 
     public val isSatellite: Boolean get() = category == SourceCategory.SATELLITE
+
+    /**
+     * Источник может тайно опираться на GNSS (сетевой провайдер некоторых прошивок, например Huawei,
+     * подмешивает спутниковую позицию). Такой источник получает пониженный вес и не даёт кворума.
+     */
+    public val mayUseGnss: Boolean get() = this == NETWORK
 }

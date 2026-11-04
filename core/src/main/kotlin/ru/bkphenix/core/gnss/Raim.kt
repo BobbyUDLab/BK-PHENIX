@@ -8,7 +8,7 @@ import kotlin.math.sqrt
 
 /** Состояние контроля целостности приёмником (RAIM). */
 public enum class RaimStatus(public val description: String) {
-    /** Меньше 5 спутников: ошибку обнаружить невозможно. */
+    /** Нет избыточности (спутников меньше 5 + число дополнительных систем): ошибку обнаружить невозможно. */
     UNAVAILABLE("RAIM недоступен: мало спутников"),
     OK("RAIM: невязки согласованы"),
     /** Ошибка обнаружена и неисправные спутники исключены (FDE). */
@@ -54,7 +54,7 @@ public class Raim(
         val excluded = mutableListOf<ExcludedSatellite>()
         repeat(maxExclusions) {
             // Исключение имеет смысл, только если после него останется избыточность для проверки.
-            if (current.size - 1 < MIN_FOR_DETECTION) return result(RaimStatus.FAULT, all, excluded)
+            if (current.size - 1 < minForDetection(current)) return result(RaimStatus.FAULT, all, excluded)
             val candidates = current.indices.mapNotNull { i ->
                 val subset = current.filterIndexed { k, _ -> k != i }
                 solver.solve(subset, reference.position)?.let { Triple(current[i], subset, it) }
@@ -89,11 +89,12 @@ public class Raim(
         val h = s.geometryEnu
         val n = h.rows
         val sig = s.used.map { s.sigmasM.getValue(it) }
-        val a = Matrix(4, n).also { m ->
+        val u = h.cols
+        val a = Matrix(u, n).also { m ->
             val ht = h.transpose()
-            val htw = Matrix(4, n).also { for (r in 0 until 4) for (c in 0 until n) it[r, c] = ht[r, c] / (sig[c] * sig[c]) }
+            val htw = Matrix(u, n).also { for (r in 0 until u) for (c in 0 until n) it[r, c] = ht[r, c] / (sig[c] * sig[c]) }
             val prod = s.covarianceEnu * htw
-            for (r in 0 until 4) for (c in 0 until n) m[r, c] = prod[r, c]
+            for (r in 0 until u) for (c in 0 until n) m[r, c] = prod[r, c]
         }
         val p = h * a
         var maxSlope = 0.0
@@ -108,8 +109,12 @@ public class Raim(
     }
 
     public companion object {
-        /** Минимум спутников, при котором RAIM ещё обнаруживает ошибку (4 + 1). */
+        /** Минимум спутников одной системы, при котором RAIM ещё обнаруживает ошибку (4 + 1). */
         public const val MIN_FOR_DETECTION: Int = 5
+
+        /** Минимум для обнаружения с учётом межсистемных смещений: 4 + (число систем − 1) + 1. */
+        public fun minForDetection(inputs: List<RangeInput>): Int =
+            MIN_FOR_DETECTION + WlsSolver.clockSystems(inputs).size - 1
 
         /** Квантиль нормального распределения (Абрамовиц–Стиган 26.2.23, погрешность < 4.5·10⁻⁴). */
         public fun normalQuantile(p: Double): Double {

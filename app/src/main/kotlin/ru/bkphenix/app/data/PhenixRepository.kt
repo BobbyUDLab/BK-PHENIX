@@ -53,7 +53,10 @@ import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.gnss.NavigationSubframe
 import ru.bkphenix.core.gnss.Pseudoranges
 import ru.bkphenix.core.gnss.RawGnssEpoch
+import ru.bkphenix.core.compare.ComparisonResult
+import ru.bkphenix.core.model.PositionSource
 import ru.bkphenix.core.model.SatelliteStatus
+import ru.bkphenix.core.model.SourceGroup
 import ru.bkphenix.core.model.TimeObservation
 import ru.bkphenix.core.model.TimeSource
 import ru.bkphenix.app.data.roads.RoadGraphStore
@@ -366,7 +369,11 @@ class PhenixRepository(
         val solution = if (extra.isEmpty()) solved
         else solved.copy(integrity = IntegrityReport.merge(listOf(solved.integrity) + extra))
         _solution.value = solution
-        deadReckoning.onSolution(solution.point, solution.accuracyM, solution.integrity.state, rt)
+        // Счисление считается независимым, только если привязано к решению, которое подтверждено
+        // без GNSS-повторителей и без самого счисления (или якорем).
+        val confirmed = solution.comparison.strongConfirmationsExcluding(SourceGroup.INERTIAL) >= ComparisonResult.QUORUM ||
+            solution.comparison.accepted.any { it.source == PositionSource.LANDMARK }
+        deadReckoning.onSolution(solution.point, solution.accuracyM, solution.integrity.state, rt, confirmed)
         solution.point?.let { updateDeclination(it, now) }
         if (logRecorder.isRecording) {
             logRecorder.json(

@@ -162,7 +162,7 @@ private val Bad: Color @Composable get() = LocalStatusColors.current.bad
 @Composable
 private fun IntegrityState.color(): Color = when (this) {
     IntegrityState.OK -> Ok
-    IntegrityState.NO_DATA, IntegrityState.INCONSISTENT, IntegrityState.SUSPICIOUS -> Warn
+    IntegrityState.NO_DATA, IntegrityState.INCONSISTENT, IntegrityState.SUSPICIOUS, IntegrityState.UNCONFIRMED -> Warn
     else -> Bad
 }
 

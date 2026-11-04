@@ -34,4 +34,13 @@
   <string name="notification_title">BK-PHENIX собирает данные</string>
   <string name="notification_text">Сверка ГНСС, сетей и датчиков</string>
   <string name="notification_stop">Остановить</string>
+    <string name="section_track">Трек</string>
+    <string name="track_recording">Идёт запись</string>
+    <string name="track_points">точек: %1$d</string>
+    <string name="track_empty">Сохранённых треков нет</string>
+    <string name="track_export_empty">В треке нет точек</string>
+    <string name="action_track_start">Начать запись</string>
+    <string name="action_track_stop">Остановить запись</string>
+    <string name="action_track_export">GPX</string>
+    <string name="action_delete">Удалить</string>
 </resources>

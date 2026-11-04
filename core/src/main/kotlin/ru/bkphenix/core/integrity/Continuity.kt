@@ -2,7 +2,10 @@ package ru.bkphenix.core.integrity
 
 import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.model.PositionObservation
+import ru.bkphenix.core.model.PositionSource
 import ru.bkphenix.core.model.SourceGroup
+import kotlin.math.atan2
+import kotlin.math.hypot
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -100,7 +103,20 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
 
         if (gnss != null) {
             val o = origin
-            if (o == null || nowMillis - lastMillis > config.resetGapMillis) {
+            val gapReset = o != null && nowMillis - lastMillis > config.resetGapMillis
+            val blockedReset = if (gapReset) implausibleAfterGap(gnss, observations, nowMillis) else null
+            if (blockedReset != null) {
+                // Поездка 04.11.2026, 13:10:40 и 13:12:11 МСК: подмена у Шереметьево длилась > 30 с, все GNSS
+                // отсеивались, lastMillis «старел», и перезапуск фильтра принимал поддельную точку в 20 км.
+                dropped = gnssGroup
+                raise(nowMillis, blockedReset)
+                if (recover(gnss, independent, nowMillis) && !contradicted(gnss, observations)) {
+                    init(gnss, nowMillis)
+                    dropped = emptyList()
+                    clearStreak()
+                    unconfirmed = independent.isEmpty()
+                }
+            } else if (o == null || gapReset) {
                 init(gnss, nowMillis)
             } else {
                 val dt = (nowMillis - lastMillis) / 1000.0
@@ -138,7 +154,7 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
                 if (dropped.isEmpty()) {
                     clearStreak()
                     lastMillis = nowMillis
-                } else if (recover(gnss, independent, nowMillis)) {
+                } else if (recover(gnss, independent, nowMillis) && !contradicted(gnss, observations)) {
                     // Фильтр застрял на старом состоянии: GNSS N эпох подряд движется правдоподобно
                     // и согласуется с независимыми источниками — перезапуск, тревога держится holdMillis.
                     init(gnss, nowMillis)
@@ -182,6 +198,39 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
     }
 
     /** Согласие GNSS хотя бы с одним независимым источником (без них проверять не с чем — да). */
+    /**
+     * Перезапуск после перерыва допустим, только если новая точка GNSS достижима от последней принятой
+     * (макс. скорость × перерыв + 3σ) и не противоречит ни одному другому источнику (сеть, соты, Wi-Fi, счисление,
+     * якорь). Сеть здесь годится как свидетель против: она может опираться на GNSS, но не на поддельную.
+     */
+    private fun implausibleAfterGap(gnss: PositionObservation, observations: List<PositionObservation>, nowMillis: Long): String? {
+        val o = origin ?: return null
+        val gapS = (nowMillis - lastMillis) / 1000.0
+        val last = o.offset(hypot(x[0], x[1]), Math.toDegrees(atan2(x[0], x[1])))
+        val reach = config.maxSpeedMps * gapS + 3 * (gnss.accuracyM + sqrt(p[0][0]))
+        val jump = gnss.point.distanceTo(last)
+        if (jump > reach) return "Невозможный скачок GNSS после перерыва ${gapS.toInt()} с: ${jump.toInt()} м (достижимо ${reach.toInt()} м)"
+        val others = observations.filter { isOtherWitness(it, gnss) }
+        if (others.isNotEmpty() && others.none { closeTo(gnss, it) }) {
+            val d = others.minOf { gnss.point.distanceTo(it.point) }
+            return "GNSS после перерыва в ${d.toInt()} м от других источников"
+        }
+        return null
+    }
+
+    /** Хоть один другой источник (включая сеть) далеко — восстанавливаться на GNSS нельзя. */
+    private fun contradicted(gnss: PositionObservation, observations: List<PositionObservation>) =
+        observations.any { isOtherWitness(it, gnss) && !closeTo(gnss, it) }
+
+    /** Свидетель — не-GNSS источник или сеть не старше 2 мин; допуск растёт на макс. скорость × возраст свидетеля. */
+    private fun isOtherWitness(o: PositionObservation, gnss: PositionObservation) =
+        (SourceGroup.GNSS_SIGNAL !in o.origin || o.source == PositionSource.NETWORK) &&
+            gnss.timestampMillis - o.timestampMillis <= WITNESS_MAX_AGE_MILLIS
+
+    private fun closeTo(gnss: PositionObservation, o: PositionObservation) =
+        gnss.point.distanceTo(o.point) <= config.recoveryAgreementM + 3 * (gnss.accuracyM + o.accuracyM) +
+            config.maxSpeedMps * ((gnss.timestampMillis - o.timestampMillis).coerceAtLeast(0) / 1000.0)
+
     private fun agrees(gnss: PositionObservation, independent: List<PositionObservation>): Boolean =
         if (independent.isEmpty()) true
         else independent.any { gnss.point.distanceTo(it.point) <= config.recoveryAgreementM + 3 * it.accuracyM }
@@ -260,5 +309,6 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
 
     private companion object {
         const val INITIAL_SPEED_SIGMA = 30.0
+        const val WITNESS_MAX_AGE_MILLIS = 120_000L
     }
 }

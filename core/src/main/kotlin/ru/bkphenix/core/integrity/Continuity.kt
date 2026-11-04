@@ -5,6 +5,7 @@ import ru.bkphenix.core.model.PositionObservation
 import ru.bkphenix.core.model.SourceGroup
 import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -61,6 +62,7 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
     private val p = Array(2) { DoubleArray(3) } // по оси: Ppp, Ppv, Pvv
     private var lastMillis = 0L
     private var cusum = 0.0
+    private val cusums = mutableMapOf<SourceGroup, Double>()
     private var alarmUntil = Long.MIN_VALUE
     private var alarmReason: String? = null
     private var rejectStreak = 0
@@ -74,6 +76,7 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
     public fun reset() {
         origin = null
         cusum = 0.0
+        cusums.clear()
         alarmUntil = Long.MIN_VALUE
         alarmReason = null
         unconfirmed = false
@@ -188,17 +191,28 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
         alarmReason = reason
     }
 
+    /**
+     * CUSUM ведётся отдельно по каждой независимой группе: при согласованной подмене GNSS и Wi-Fi общее
+     * среднее тянул бы поддельный Wi-Fi (у него σ меньше), и честные соты не были бы услышаны.
+     * Итоговый накопитель — максимум по группам.
+     */
     private fun updateCusum(gnss: PositionObservation, independent: List<PositionObservation>) {
-        val w = independent.sumOf { it.weight }
-        val lat = independent.sumOf { it.point.latitude * it.weight } / w
-        val lon = independent.sumOf { it.point.longitude * it.weight } / w
-        val sigmaI = max(1.0 / sqrt(w), config.cusumMinIndependentSigmaM)
-        val z = gnss.point.distanceTo(GeoPoint(lat, lon)) / sqrt(gnss.accuracyM * gnss.accuracyM + sigmaI * sigmaI)
-        cusum = max(0.0, cusum + z - config.cusumK)
-        if (cusum > config.cusumH) {
-            raise(lastMillis, "Плавный увод GNSS от независимых источников (CUSUM ${cusum.toInt()})")
-            cusum = 0.0
+        val byGroup = independent.groupBy { o -> o.origin.minBy { it.ordinal } }
+        for ((group, obs) in byGroup) {
+            val w = obs.sumOf { it.weight }
+            val lat = obs.sumOf { it.point.latitude * it.weight } / w
+            val lon = obs.sumOf { it.point.longitude * it.weight } / w
+            val sigmaI = max(1.0 / sqrt(w), config.cusumMinIndependentSigmaM)
+            val z = gnss.point.distanceTo(GeoPoint(lat, lon)) / sqrt(gnss.accuracyM * gnss.accuracyM + sigmaI * sigmaI)
+            // Накопитель ограничен 2h и не сбрасывается при тревоге: пока расхождение держится, тревога
+            // продлевается каждую эпоху, а после схода GNSS с источником гаснет за ~h/k эпох.
+            val c = min(2 * config.cusumH, max(0.0, (cusums[group] ?: 0.0) + z - config.cusumK))
+            cusums[group] = c
+            if (c > config.cusumH) {
+                raise(lastMillis, "Плавный увод GNSS от независимого источника «${group.displayName}» (CUSUM ${c.toInt()})")
+            }
         }
+        cusum = cusums.values.maxOrNull() ?: 0.0
     }
 
     private fun init(gnss: PositionObservation, nowMillis: Long) {

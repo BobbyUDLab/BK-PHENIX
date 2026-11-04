@@ -73,6 +73,11 @@ interface TrackDao {
     @Query("SELECT * FROM track_points WHERE track_id = :trackId ORDER BY time")
     fun pointsFlow(trackId: Long): Flow<List<TrackPointEntity>>
 
+    @Query(
+        "SELECT * FROM track_points WHERE track_id = (SELECT id FROM tracks ORDER BY started_at DESC LIMIT 1) ORDER BY time",
+    )
+    fun latestPointsFlow(): Flow<List<TrackPointEntity>>
+
     @Query("DELETE FROM tracks WHERE id = :id")
     suspend fun delete(id: Long)
 

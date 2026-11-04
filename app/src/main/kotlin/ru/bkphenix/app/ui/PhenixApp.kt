@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -36,10 +37,12 @@ import ru.bkphenix.app.permissions.Permissions
 import ru.bkphenix.app.service.PhenixLocationService
 import ru.bkphenix.app.ui.coordinate.CoordinateScreen
 import ru.bkphenix.app.ui.diagnostics.DiagnosticsScreen
+import ru.bkphenix.app.ui.map.MapScreen
 import ru.bkphenix.app.ui.satellites.SatellitesScreen
 
 private enum class Destination(val route: String, val titleRes: Int, val icon: ImageVector) {
     COORDINATE("coordinate", R.string.screen_coordinate, Icons.Filled.LocationOn),
+    MAP("map", R.string.screen_map, Icons.Filled.Place),
     SATELLITES("satellites", R.string.screen_satellites, Icons.Filled.Star),
     DIAGNOSTICS("diagnostics", R.string.screen_diagnostics, Icons.Filled.Build),
 }
@@ -94,6 +97,7 @@ fun PhenixApp() {
                     onRequestPermissions = { launcher.launch(Permissions.all.toTypedArray()) },
                 )
             }
+            composable(Destination.MAP.route) { MapScreen(viewModel(factory = ViewModelFactory.instance)) }
             composable(Destination.SATELLITES.route) { SatellitesScreen(viewModel(factory = ViewModelFactory.instance)) }
             composable(Destination.DIAGNOSTICS.route) { DiagnosticsScreen(viewModel(factory = ViewModelFactory.instance)) }
         }

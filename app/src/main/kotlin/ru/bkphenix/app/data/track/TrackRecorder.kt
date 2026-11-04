@@ -75,6 +75,9 @@ class TrackRecorder(
         scope.launch { dao.delete(id) }
     }
 
+    /** Точки последнего сохранённого трека или null, если треков нет. */
+    fun latestPoints(): Flow<List<TrackPointEntity>> = dao.latestPointsFlow()
+
     /** Точки трека для карты. */
     fun points(id: Long): Flow<List<TrackPointEntity>> = dao.pointsFlow(id)
 

@@ -71,7 +71,8 @@ public enum class PositionSource(
 
     /**
      * Источник может тайно опираться на GNSS (сетевой провайдер некоторых прошивок, например Huawei,
-     * подмешивает спутниковую позицию). Такой источник получает пониженный вес и не даёт кворума.
+     * подмешивает спутниковую позицию; Fused смешивает GNSS по определению). Такой источник получает
+     * пониженный вес и не даёт кворума.
      */
-    public val mayUseGnss: Boolean get() = this == NETWORK
+    public val mayUseGnss: Boolean get() = this == NETWORK || this == FUSED
 }

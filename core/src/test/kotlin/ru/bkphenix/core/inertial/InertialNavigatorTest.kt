@@ -1,5 +1,6 @@
 package ru.bkphenix.core.inertial
 
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -46,6 +47,18 @@ class InertialNavigatorTest {
     }
 
     @Test
+    fun `склонение переводит магнитный курс в истинный`() {
+        val nav = InertialNavigator(MotionMode.WALK)
+        for (i in 0 until 500) nav.onImu(ImuSample(i * dtNanos, doubleArrayOf(0.0, 0.0, 9.81), doubleArrayOf(0.0, 0.0, 0.0), magNorth))
+        val magnetic = nav.headingDeg
+        nav.declinationDeg = 11.5
+        assertEquals(11.5, angleDiff(nav.headingDeg, magnetic), 1e-9)
+        nav.declinationDeg = -20.0
+        assertEquals(-20.0, angleDiff(nav.headingDeg, magnetic), 1e-9)
+        assertTrue(nav.headingDeg in 0.0..360.0)
+    }
+
+    @Test
     fun `слишком долгий пропуск — оценки нет`() {
         val (_, e) = walk(600, steps = true)
         assertNull(e)
@@ -79,4 +92,6 @@ class InertialNavigatorTest {
         assertTrue(err < 2.5 * e.sigmaM, "ошибка $err при σ ${e.sigmaM}")
         assertTrue(kotlin.math.abs(e.bearingDeg!! - 0.0).let { minOf(it, 360 - it) } < 10, "курс ${e.bearingDeg}")
     }
+
+    private fun angleDiff(a: Double, b: Double) = ((a - b) % 360.0 + 540.0) % 360.0 - 180.0
 }

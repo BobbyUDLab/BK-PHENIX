@@ -2,6 +2,7 @@ package ru.bkphenix.core.gnss
 
 import ru.bkphenix.core.integrity.GpsParity
 import ru.bkphenix.core.integrity.NavigationWord
+import ru.bkphenix.core.model.GnssConstellation
 import kotlin.math.abs
 
 /** Подкадр GPS LNAV одного спутника: 10 слов по 30 бит. */
@@ -172,7 +173,7 @@ public class EphemerisStore {
     }
 
     /** Число спутников, для которых есть внешние эфемериды. */
-    public val externalSize: Int get() = external.size
+    public val externalSize: Int get() = external.size + externalNav.size
 
     /** Спутники, для которых есть хоть какие-то эфемериды. */
     public val availableSvids: Set<Int> get() = ephemerides.keys + external.keys
@@ -188,5 +189,54 @@ public class EphemerisStore {
             .filter { (_, age) -> age <= GpsEphemeris.FIT_INTERVAL_S }
             .minByOrNull { (_, age) -> age }
             ?.first
+    }
+
+    private val externalNav = HashMap<SatId, List<NavEphemeris>>()
+
+    /**
+     * Заменяет внешний набор всех систем (RINEX BRDM/BRDC). Эфемериды GPS идут в тот же
+     * набор, что и [replaceExternal]; остальные хранятся по спутнику.
+     */
+    public fun replaceExternalNav(list: List<NavEphemeris>) {
+        replaceExternal(list.filterIsInstance<GpsEphemeris>())
+        externalNav.clear()
+        list.filter { it !is GpsEphemeris }.groupBy { it.sat }.forEach { (sat, items) ->
+            externalNav[sat] = items.distinctBy { Triple(it.referenceWeek, it.referenceTow, (it as? KeplerEphemeris)?.dataSource) }
+        }
+    }
+
+    /** Спутники всех систем, для которых есть эфемериды. */
+    public val availableSats: Set<SatId>
+        get() = availableSvids.map { SatId(GnssConstellation.GPS, it) }.toSet() + externalNav.keys
+
+    /**
+     * Эфемериды любой системы для момента (неделя GPS, секунды недели GPS): ближайшие по
+     * опорному времени в окне применимости, здоровые раньше нездоровых, у Galileo I/NAV
+     * раньше F/NAV (одночастотный E1). У ГЛОНАСС с неизвестным номером слота (Android
+     * сообщает 93…106 = литера + 100) спутник ищется по литере, если она однозначна.
+     */
+    public fun select(sat: SatId, gpsWeek: Int, tow: Double): NavEphemeris? {
+        if (sat.constellation == GnssConstellation.GPS) return select(sat.svid, gpsWeek, tow)
+        val candidates = if (sat.constellation == GnssConstellation.GLONASS && sat.svid in GLONASS_FCN_SVIDS) {
+            val k = sat.svid - GLONASS_FCN_SVID_OFFSET
+            val byChannel = externalNav.filterKeys { it.constellation == GnssConstellation.GLONASS }.values
+                .filter { list -> list.any { (it as GlonassEphemeris).frequencyChannel == k } }
+            if (byChannel.size != 1) return null
+            byChannel.single()
+        } else {
+            externalNav[sat].orEmpty()
+        }
+        return candidates
+            .filter { it.isValidAt(gpsWeek, tow) }
+            .minWithOrNull(
+                compareBy<NavEphemeris> { if (it.isHealthy) 0 else 1 }
+                    .thenBy { if ((it as? KeplerEphemeris)?.let { k -> k.dataSource != 0 && k.dataSource and 0x201 == 0 } == true) 1 else 0 }
+                    .thenBy { abs(it.ageSeconds(gpsWeek, tow)) },
+            )
+    }
+
+    private companion object {
+        val GLONASS_FCN_SVIDS = 93..106
+        const val GLONASS_FCN_SVID_OFFSET = 100
     }
 }

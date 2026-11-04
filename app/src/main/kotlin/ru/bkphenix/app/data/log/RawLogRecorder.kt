@@ -69,6 +69,20 @@ class RawLogRecorder(private val directory: File, private val header: () -> Stri
     fun json(type: String, timeMillis: Long, fields: Map<String, Any?>) =
         write(jsonl, Json.encode(linkedMapOf<String, Any?>("type" to type, "t" to timeMillis) + fields))
 
+    /** Сбрасывает буферы на диск: если процесс убьют, потеряется не больше последних секунд. */
+    @Synchronized
+    fun flush() {
+        if (!isRecording) return
+        try {
+            txt?.flush()
+            jsonl?.flush()
+        } catch (e: IOException) {
+            isRecording = false
+            closeAll()
+            publish("Ошибка записи: ${e.message}")
+        }
+    }
+
     /** Удаляет файлы прошлых сессий (текущая запись не трогается). */
     @Synchronized
     fun deleteFinished() {

@@ -1,5 +1,6 @@
 package ru.bkphenix.app.ui.map
 
+import ru.bkphenix.app.ui.theme.LocalIsOled
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -103,17 +104,25 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
                     Toast.makeText(context, R.string.map_anchor_set, Toast.LENGTH_SHORT).show()
                     true
                 }
-                val json = context.assets.open("map/style-ru.json").bufferedReader().use { it.readText() }
-                    .replace("{PMTILES}", "file://${file.absolutePath}")
-                m.setStyle(Style.Builder().fromJson(json)) { s ->
-                    MapLayers.install(s)
-                    style = s
-                }
                 map = m
             }
         }
     }
     MapViewLifecycle(mapView)
+
+    // Стиль карты следует за темой: при смене темы стиль и слои приложения ставятся заново.
+    val oled = LocalIsOled.current
+    LaunchedEffect(map, oled) {
+        val m = map ?: return@LaunchedEffect
+        style = null
+        val asset = if (oled) "map/style-ru-dark.json" else "map/style-ru.json"
+        val json = context.assets.open(asset).bufferedReader().use { it.readText() }
+            .replace("{PMTILES}", "file://${file.absolutePath}")
+        m.setStyle(Style.Builder().fromJson(json)) { s ->
+            MapLayers.install(s, oled)
+            style = s
+        }
+    }
 
     LaunchedEffect(style, solution, held, track) {
         style?.let { MapLayers.update(it, solution, held, track) }

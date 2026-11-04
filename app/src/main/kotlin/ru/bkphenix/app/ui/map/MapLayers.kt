@@ -1,5 +1,6 @@
 package ru.bkphenix.app.ui.map
 
+import ru.bkphenix.app.ui.theme.PhenixPalette
 import android.graphics.Color
 import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.CircleLayer
@@ -28,11 +29,15 @@ internal object MapLayers {
     private const val ANCHOR = "bk-anchor"
     private const val POSITION = "bk-position"
 
-    fun install(style: Style) {
+    /** Цвета слоёв приложения; на тёмной карте — циан и оранжевый бренда, обводки чёрные. */
+    private var dark = false
+
+    fun install(style: Style, oled: Boolean = false) {
+        dark = oled
         listOf(TRACK, SOURCES, ANCHOR, POSITION).forEach { style.addSource(GeoJsonSource(it)) }
         style.addLayer(
             LineLayer(TRACK, TRACK).withProperties(
-                PropertyFactory.lineColor("#E0457B"),
+                PropertyFactory.lineColor(if (oled) PhenixPalette.hex(PhenixPalette.ORANGE) else "#E0457B"),
                 PropertyFactory.lineWidth(4f),
                 PropertyFactory.lineOpacity(0.85f),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
@@ -52,7 +57,7 @@ internal object MapLayers {
                 CircleLayer("$id-dot", id).withFilter(Expression.eq(Expression.geometryType(), "Point")).withProperties(
                     PropertyFactory.circleColor(Expression.toColor(Expression.get("color"))),
                     PropertyFactory.circleRadius(Expression.toNumber(Expression.get("radius"))),
-                    PropertyFactory.circleStrokeColor(Color.WHITE),
+                    PropertyFactory.circleStrokeColor(if (oled) Color.BLACK else Color.WHITE),
                     PropertyFactory.circleStrokeWidth(2f),
                 ),
             )
@@ -64,7 +69,7 @@ internal object MapLayers {
                 PropertyFactory.textSize(12f),
                 PropertyFactory.textOffset(arrayOf(0f, 1.2f)),
                 PropertyFactory.textColor(Expression.toColor(Expression.get("color"))),
-                PropertyFactory.textHaloColor(Color.WHITE),
+                PropertyFactory.textHaloColor(if (oled) Color.BLACK else Color.WHITE),
                 PropertyFactory.textHaloWidth(1.5f),
                 PropertyFactory.textAllowOverlap(true),
             ),
@@ -112,17 +117,28 @@ internal object MapLayers {
     private fun GeoPoint.toPoint(): Point = Point.fromLngLat(longitude, latitude)
 
     private const val CIRCLE_STEPS = 48
-    private const val POSITION_COLOR = "#1A73E8"
-    private const val HELD_COLOR = "#8A8F98"
-    private const val ANCHOR_COLOR = "#7B1FA2"
-    private const val REJECTED = "#D93A3A"
+    private val POSITION_COLOR get() = if (dark) PhenixPalette.hex(PhenixPalette.CYAN) else "#1A73E8"
+    private val HELD_COLOR get() = if (dark) "#A9B8CC" else "#8A8F98"
+    private val ANCHOR_COLOR get() = if (dark) "#C792EA" else "#7B1FA2"
+    private val REJECTED get() = if (dark) PhenixPalette.hex(PhenixPalette.Oled.STATUS_BAD) else "#D93A3A"
 
-    private fun PositionSource.color(): String = when (this) {
-        PositionSource.GNSS -> "#2E9D5B"
-        PositionSource.NETWORK -> "#E08A00"
-        PositionSource.CELL -> "#C2185B"
-        PositionSource.WIFI_RSSI, PositionSource.WIFI_RTT -> "#00838F"
-        PositionSource.BLUETOOTH -> "#3949AB"
-        else -> "#5D4037"
+    private fun PositionSource.color(): String = if (dark) {
+        when (this) {
+            PositionSource.GNSS, PositionSource.GNSS_WLS -> PhenixPalette.hex(PhenixPalette.Oled.STATUS_OK)
+            PositionSource.NETWORK -> PhenixPalette.hex(PhenixPalette.GOLD)
+            PositionSource.CELL -> "#FF7AB6"
+            PositionSource.WIFI_RSSI, PositionSource.WIFI_RTT -> "#4DD8E6"
+            PositionSource.BLUETOOTH -> "#8C9EFF"
+            else -> "#D7B899"
+        }
+    } else {
+        when (this) {
+            PositionSource.GNSS -> "#2E9D5B"
+            PositionSource.NETWORK -> "#E08A00"
+            PositionSource.CELL -> "#C2185B"
+            PositionSource.WIFI_RSSI, PositionSource.WIFI_RTT -> "#00838F"
+            PositionSource.BLUETOOTH -> "#3949AB"
+            else -> "#5D4037"
+        }
     }
 }

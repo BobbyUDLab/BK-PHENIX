@@ -19,6 +19,14 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Большие файлы только через LFS
+        run: |
+          gzip -t app/src/main/assets/cells/*.bin.gz
+          big=$(git ls-files -z | xargs -0 -I{} sh -c 'git check-attr filter -- "{}" | grep -q "filter: lfs" || { s=$(stat -c %s "{}" 2>/dev/null || echo 0); [ "$s" -gt 5000000 ] && echo "{}"; }; true')
+          if [ -n "$big" ]; then echo "Файлы больше 5 МБ вне LFS:"; echo "$big"; exit 1; fi
 
       - uses: actions/setup-java@v4
         with:

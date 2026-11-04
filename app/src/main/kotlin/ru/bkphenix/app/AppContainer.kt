@@ -3,6 +3,7 @@ package ru.bkphenix.app
 import android.content.Context
 import android.os.Build
 import ru.bkphenix.app.data.PhenixRepository
+import ru.bkphenix.app.data.cells.AssetCellTowerDatabase
 import ru.bkphenix.app.data.map.MapFileStore
 import ru.bkphenix.app.data.log.GnssLoggerFormat
 import ru.bkphenix.app.data.log.RawLogRecorder
@@ -33,6 +34,7 @@ class AppContainer(context: Context) {
             sensors = SensorDataSource(app),
             networkTimeSource = NetworkTimeDataSource(app),
             rinex = RinexEphemerisSource(File(app.filesDir, "ephemeris")),
+            cellTowers = AssetCellTowerDatabase(app),
             logRecorder = RawLogRecorder(File(app.filesDir, "logs")) {
                 GnssLoggerFormat.header(
                     appVersion = BuildConfig.VERSION_NAME,

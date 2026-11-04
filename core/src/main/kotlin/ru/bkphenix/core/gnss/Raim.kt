@@ -16,6 +16,11 @@ public enum class RaimStatus(public val description: String) {
     EXCLUDED("RAIM: исключены неисправные спутники"),
     /** Ошибка обнаружена, исключить не удалось — решению доверять нельзя. */
     FAULT("RAIM: ошибка обнаружена, исключение невозможно"),
+    /**
+     * Массовые грубые (> 500 м) ошибки, отсев не сходится: срыв слежения при перезахвате, а не признак подмены
+     * (подмена даёт согласованные дальности). Собственному решению доверять нельзя, но это не тревога.
+     */
+    DEGRADED("RAIM недоступен: массовый срыв слежения, измерения несогласованы"),
 }
 
 public data class ExcludedSatellite(val sat: SatId, val residualM: Double)
@@ -48,9 +53,11 @@ public class Raim(
     private val grossErrorM: Double = 500.0,
     /** Сколько грубых ошибок можно отсеять до проверки χ² (не больше трети измерений). */
     private val maxGrossExclusions: Int = 10,
+    /** Порог слабого сигнала, дБ·Гц: грубые ошибки таких спутников не ограничены лимитом отсева. */
+    private val weakCn0DbHz: Double = 25.0,
 ) {
     public fun process(inputs: List<RangeInput>): RaimResult {
-        val (screened, gross) = screenGross(inputs)
+        val (screened, gross) = screenGross(inputs) ?: return degraded(inputs)
         val result = processScreened(screened)
         if (gross.isEmpty() || result.solution == null) return result
         val status = if (result.status == RaimStatus.OK) RaimStatus.EXCLUDED else result.status
@@ -62,18 +69,31 @@ public class Raim(
      * Такие сбои у телефонов в городе — обычное дело; одиночный подменённый спутник с км-смещением
      * так же отсеивается, а согласованная подмена всех спутников невязок не даёт и ловится другими детекторами.
      */
-    private fun screenGross(inputs: List<RangeInput>): Pair<List<RangeInput>, List<ExcludedSatellite>> {
+    private fun degraded(inputs: List<RangeInput>): RaimResult =
+        RaimResult(RaimStatus.DEGRADED, solver.solve(inputs), emptyList(), null, null, null)
+
+    /** null — грубых ошибок больше допустимого: отсев мог бы сойтись к ложному кластеру. */
+    private fun screenGross(inputs: List<RangeInput>): Pair<List<RangeInput>, List<ExcludedSatellite>>? {
         var current = inputs
         val excluded = mutableListOf<ExcludedSatellite>()
+        val weakExcluded = mutableSetOf<SatId>()
         // Не больше четверти измерений и с запасом избыточности: иначе отсев может сойтись к ложному кластеру
         // (журнал 2026-11-04, эпоха скачка часов: 7 спутников «согласовались» в 18 км от истины).
         val limit = minOf(maxGrossExclusions, inputs.size / 4)
         while (true) {
             val s = solver.solve(current) ?: break
             if (s.degreesOfFreedom < 2) break
-            val worst = s.residualsM.maxByOrNull { abs(it.value) } ?: break
-            if (abs(worst.value) <= grossErrorM) break
-            if (excluded.size >= limit || current.size - 1 < minForDetection(current) + 2) return inputs to emptyList()
+            val byMagnitude = s.residualsM.entries.sortedByDescending { abs(it.value) }
+            if (abs(byMagnitude.first().value) <= grossErrorM) break
+            // Слабый сигнал с км-невязкой — срыв слежения (неразрешённая мс-неоднозначность при C/N0 < 25),
+            // а не подмена: такие отсеиваются первыми и сверх лимита, иначе срыв на перезахвате давал FAULT
+            // (журнал 2026-11-04: 11 из 14 эпизодов тревоги — перезахват у домов, χ² до 10⁹).
+            val cn0 = current.associate { it.sat to it.cn0DbHz }
+            val weakGross = byMagnitude.firstOrNull { abs(it.value) > grossErrorM && (cn0[it.key] ?: 99.0) < weakCn0DbHz }
+            val worst = weakGross ?: byMagnitude.first()
+            if (weakGross == null && excluded.size - weakExcluded.size >= limit) return null
+            if (current.size - 1 < minForDetection(current) + 2) return null
+            if (weakGross != null) weakExcluded += worst.key
             excluded += ExcludedSatellite(worst.key, worst.value)
             current = current.filter { it.sat != worst.key }
         }

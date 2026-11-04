@@ -112,7 +112,7 @@ public class SpoofingMonitor(private val t: SpoofingThresholds = SpoofingThresho
             val l1 = list.firstOrNull { it.measurement.band == GnssBand.L1 } ?: return@mapNotNull null
             val l5 = list.firstOrNull { it.measurement.band == GnssBand.L5 } ?: return@mapNotNull null
             l5.rangeM - l1.rangeM
-        }
+        }.filterNot { isMillisecondAmbiguity(it) }
         if (diffs.size < 4) return na(DetectorKind.DUAL_FREQUENCY, "Двухчастотных спутников: ${diffs.size}")
         val bad = diffs.count { it !in t.dualFrequencyRangeM }
         // Одиночный выброс (неоднозначность кода L5, многолучёвость) — сбой измерения, а не подмена:
@@ -123,6 +123,17 @@ public class SpoofingMonitor(private val t: SpoofingThresholds = SpoofingThresho
         val spread = if (inliers.size >= 2) inliers.last() - inliers.first() else 0.0
         val detail = "Пар L1/L5: ${diffs.size}, вне допуска: $bad, разброс %.1f м".format(spread)
         return if (bad * 2 > diffs.size || spread > t.maxDualFrequencySpreadM) alert(DetectorKind.DUAL_FREQUENCY, detail) else pass(DetectorKind.DUAL_FREQUENCY, detail)
+    }
+
+    /**
+     * Разность, близкая к целому числу миллисекунд (≥ 1 мс), — неразрешённая неоднозначность кода L5/E5a у чипа.
+     * Подмена L1 при честном L5 даёт произвольную разность (смещение позиции), а не кратную 299,8 км;
+     * журнал 2026-11-04: все 3 эпизода «L1/L5» — разности 4, 5 и 8 мс.
+     */
+    private fun isMillisecondAmbiguity(diffM: Double): Boolean {
+        val ms = diffM / MS_RANGE_M
+        val k = Math.round(ms)
+        return k != 0L && abs(diffM - k * MS_RANGE_M) < MS_AMBIGUITY_TOLERANCE_M
     }
 
     /** Смещение часов приёмника меняется плавно (дрейф); скачок — признак перехвата времени. */
@@ -247,6 +258,8 @@ public class SpoofingMonitor(private val t: SpoofingThresholds = SpoofingThresho
     private fun na(k: DetectorKind, d: String) = DetectorResult(k, DetectorVerdict.NOT_APPLICABLE, d)
 
     public companion object {
+        private const val MS_RANGE_M: Double = 299_792.458
+        private const val MS_AMBIGUITY_TOLERANCE_M: Double = 1_000.0
         /** Отчёт целостности по сработавшим детекторам. */
         public fun report(results: List<DetectorResult>): IntegrityReport = IntegrityReport.merge(
             results.filter { it.verdict == DetectorVerdict.ALERT }

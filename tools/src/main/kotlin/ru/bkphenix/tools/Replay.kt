@@ -83,6 +83,7 @@ internal class Replay(private val processor: GnssIntegrityProcessor, fixes: List
     private var prevFiltered = false
     private var filteredEpisodes = 0
     private var filteredAlarmEpochs = 0
+    private val episodeCauses = sortedMapOf<String, Int>()
     var csv: java.io.PrintWriter? = null
     private var prevFull: Long? = null
     private var curUtc = 0L
@@ -129,9 +130,14 @@ internal class Replay(private val processor: GnssIntegrityProcessor, fixes: List
         val alarm = result.report.state in AlarmFilter.ALARM_STATES
         if (alarm && !prevAlarm) alarmEpisodes++
         prevAlarm = alarm
-        val filtered = alarmFilter.filter(result.report).state in AlarmFilter.ALARM_STATES
+        val filteredReport = alarmFilter.filter(result.report)
+        val filtered = filteredReport.state in AlarmFilter.ALARM_STATES
         if (filtered) filteredAlarmEpochs++
-        if (filtered && !prevFiltered) filteredEpisodes++
+        if (filtered && !prevFiltered) {
+            filteredEpisodes++
+            val cause = filteredReport.reasons.firstOrNull()?.substringBefore(':')?.take(40) ?: filteredReport.state.name
+            episodeCauses.merge(cause, 1, Int::plus)
+        }
         prevFiltered = filtered
         result.detectors.filter { it.verdict == DetectorVerdict.ALERT }.forEach {
             detectorAlarms.merge(it.kind.name, 1, Int::plus)
@@ -193,6 +199,12 @@ internal class Replay(private val processor: GnssIntegrityProcessor, fixes: List
         appendLine("Эпизодов тревоги без гистерезиса: $alarmEpisodes" + if (hours > 0) " (${"%.1f".format(alarmEpisodes / hours)} в час)" else "")
         appendLine()
         appendLine("Эпизодов тревоги с гистерезисом (как в приложении): $filteredEpisodes" + (if (hours > 0) " (${"%.1f".format(filteredEpisodes / hours)} в час)" else "") + ", эпох с тревогой: ${pct(filteredAlarmEpochs.toDouble() / total)}")
+        if (episodeCauses.isNotEmpty()) {
+            appendLine()
+            appendLine("| Причина эпизода (первая) | Эпизодов |")
+            appendLine("|---|---|")
+            episodeCauses.forEach { (k, v) -> appendLine("| $k | $v |") }
+        }
         appendLine()
         appendLine("| Детектор | Эпох с тревогой | Пример |")
         appendLine("|---|---|---|")

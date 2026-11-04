@@ -34,6 +34,7 @@ object RaimPresentation {
             RaimStatus.OK -> Severity.GOOD
             RaimStatus.EXCLUDED -> Severity.WARNING
             RaimStatus.FAULT -> Severity.ALERT
+            RaimStatus.DEGRADED -> Severity.WARNING
             RaimStatus.UNAVAILABLE, null -> Severity.NEUTRAL
         }
         return RaimUi(

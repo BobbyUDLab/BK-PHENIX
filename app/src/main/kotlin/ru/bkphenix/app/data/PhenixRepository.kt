@@ -27,6 +27,8 @@ import ru.bkphenix.app.data.model.GnssCapabilitiesSnapshot
 import ru.bkphenix.app.data.model.MeasurementSummary
 import ru.bkphenix.app.data.model.NetworkTimeSample
 import ru.bkphenix.app.data.model.SensorKind
+import ru.bkphenix.app.data.model.RawLocation
+import kotlin.math.abs
 import ru.bkphenix.app.data.model.SensorSnapshot
 import ru.bkphenix.core.inertial.DeadReckoningSource
 import ru.bkphenix.core.inertial.InertialEstimate
@@ -55,6 +57,11 @@ import ru.bkphenix.core.model.SatelliteStatus
 import ru.bkphenix.core.model.TimeObservation
 import ru.bkphenix.core.model.TimeSource
 import ru.bkphenix.app.data.roads.RoadGraphStore
+import ru.bkphenix.app.data.terrain.TerrainStore
+import ru.bkphenix.core.terrain.BarometricAltimeter
+import ru.bkphenix.core.terrain.TerrainModel
+import ru.bkphenix.core.terrain.VerticalCheck
+import ru.bkphenix.core.terrain.VerticalIntegrityMonitor
 import ru.bkphenix.core.roads.MapMatcher
 import ru.bkphenix.core.roads.MatchResult
 import ru.bkphenix.core.roads.OffRoadMonitor
@@ -91,6 +98,8 @@ class PhenixRepository(
     cellTowers: CellTowerDatabase = EmptyCellTowerDatabase,
     /** Дорожный граф для привязки к дорогам; null — привязка выключена. */
     private val roads: RoadGraphStore? = null,
+    /** Рельеф и геоид для проверки высоты ГНСС; null — проверка выключена. */
+    private val terrain: TerrainStore? = null,
     private val clock: () -> Long = System::currentTimeMillis,
     /** Монотонное время в мс в базе ИИБ (elapsedRealtime). */
     private val realtime: () -> Long = android.os.SystemClock::elapsedRealtime,
@@ -112,6 +121,15 @@ class PhenixRepository(
     private var matcher: Pair<RoadGraph, MapMatcher>? = null
     private val offRoad = OffRoadMonitor()
     private val _roadMatch = MutableStateFlow<MatchResult?>(null)
+
+    // Высота: барометр против рельефа (шаг 5c). Монитор пересоздаётся при смене файла рельефа,
+    // барометр (и его калибровка) — общий.
+    private val barometer = BarometricAltimeter()
+    private var vertical: Pair<TerrainModel, VerticalIntegrityMonitor>? = null
+    private var lastGps: RawLocation? = null
+    private val _verticalCheck = MutableStateFlow<VerticalCheck?>(null)
+    /** Итог вертикальной проверки последней эпохи: высоты ГНСС, рельефа, барометра и расхождение. */
+    val verticalCheck: StateFlow<VerticalCheck?> = _verticalCheck.asStateFlow()
     /** Итог привязки последней эпохи: исходная точка, точка на дороге, расстояние до дороги. */
     val roadMatch: StateFlow<MatchResult?> = _roadMatch.asStateFlow()
     private val pendingSubframes = ArrayList<NavigationSubframe>()
@@ -197,10 +215,14 @@ class PhenixRepository(
         job = scope.launch {
             (cellTowers as? AssetCellTowerDatabase)?.let { launch { it.load() } }
             roads?.let { launch { it.load() } }
+            terrain?.let { launch { it.load() } }
             _capabilities.value = gnss.capabilities()
             collectSafely(location.locations()) { raw ->
                 LocationMapping.toObservation(raw)?.let(aggregator::put)
-                if (raw.provider == "gps") gnssTimeOffsetMs = raw.timeMillis - clock()
+                if (raw.provider == "gps") {
+                    gnssTimeOffsetMs = raw.timeMillis - clock()
+                    lastGps = raw
+                }
                 if (logRecorder.isRecording) {
                     logRecorder.text(
                         GnssLoggerFormat.fix(
@@ -236,7 +258,10 @@ class PhenixRepository(
             }
             collectSafely(wifi.scans()) { _wifi.value = it }
             collectSafely(ble.beacons()) { _ble.value = it }
-            collectSafely(sensors.readings()) { s -> _sensors.update { it + (s.kind to s) } }
+            collectSafely(sensors.readings()) { s ->
+                _sensors.update { it + (s.kind to s) }
+                if (s.kind == SensorKind.BAROMETER) s.values.firstOrNull()?.let { barometer.onPressure(it.toDouble()) }
+            }
             collectSafely(sensors.imu()) { deadReckoning.onImu(it) }
             collectSafely(networkTimeSource.samples()) {
                 networkTimeSample = it
@@ -261,6 +286,7 @@ class PhenixRepository(
     fun setAnchor(point: GeoPoint, accuracyM: Double, mode: AnchorMode = AnchorMode.MANUAL) {
         scope.launch {
             core.anchorManager.setAnchor(Anchor(point, accuracyM, clock(), mode))
+            verticalMonitor()?.calibrateAtAnchor(point, clock())
             solveEpoch()
         }
     }
@@ -295,6 +321,22 @@ class PhenixRepository(
         return m.match(point, solution.accuracyM, motionMode)
     }
 
+    private fun verticalMonitor(): VerticalIntegrityMonitor? {
+        val model = terrain?.model ?: return null
+        return vertical?.takeIf { it.first === model }?.second
+            ?: VerticalIntegrityMonitor(model, barometer).also { vertical = model to it }
+    }
+
+    /** Высота ГНСС — только свежий фикс провайдера gps (эллипсоидальная высота Location). */
+    private fun checkVertical(solution: PhenixSolution, now: Long): VerticalCheck? {
+        val monitor = verticalMonitor() ?: return null
+        val gps = lastGps?.takeIf { abs(now - it.timeMillis) < GPS_FRESH_MILLIS }
+        val trusted = solution.integrity.state == IntegrityState.OK
+        return monitor.update(
+            solution.point, gps?.altitude, gps?.verticalAccuracyM?.toDouble(), motionMode, trusted, now,
+        )
+    }
+
     private fun solveEpoch() {
         val now = clock()
         val time = buildList {
@@ -317,8 +359,11 @@ class PhenixRepository(
         val match = matchRoad(solved)
         _roadMatch.value = match
         val offRoadReport = offRoad.update(match)
-        val solution = if (offRoadReport.state == IntegrityState.OK) solved
-        else solved.copy(integrity = IntegrityReport.merge(listOf(solved.integrity, offRoadReport)))
+        val check = checkVertical(solved, now)
+        _verticalCheck.value = check
+        val extra = listOfNotNull(offRoadReport, check?.report).filter { it.state != IntegrityState.OK }
+        val solution = if (extra.isEmpty()) solved
+        else solved.copy(integrity = IntegrityReport.merge(listOf(solved.integrity) + extra))
         _solution.value = solution
         deadReckoning.onSolution(solution.point, solution.accuracyM, solution.integrity.state, rt)
         solution.point?.let { updateDeclination(it, now) }
@@ -361,6 +406,7 @@ class PhenixRepository(
         const val TAG = "BkPhenix"
         const val EPOCH_MILLIS = 1_000L
         const val STATUS_STALE_MILLIS = 5_000L
+        const val GPS_FRESH_MILLIS = 3_000L
         const val RINEX_REFRESH_MILLIS = 2 * 3600_000L
         const val RINEX_RETRY_MILLIS = 10 * 60_000L
         const val GNSS_TIME_UNCERTAINTY_MS = 1_000L

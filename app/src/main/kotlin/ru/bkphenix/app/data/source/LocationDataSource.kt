@@ -75,6 +75,7 @@ class LocationDataSource(private val context: Context) : DataSource("Место�
             timeMillis = time,
             elapsedRealtimeNanos = elapsedRealtimeNanos,
             isMock = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) isMock else @Suppress("DEPRECATION") isFromMockProvider,
+            verticalAccuracyM = if (hasVerticalAccuracy()) verticalAccuracyMeters else null,
         )
     }
 }

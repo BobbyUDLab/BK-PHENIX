@@ -43,4 +43,17 @@
     <string name="action_track_stop">Остановить запись</string>
     <string name="action_track_export">GPX</string>
     <string name="action_delete">Удалить</string>
+    <string name="screen_map">Карта</string>
+    <string name="map_missing_title">Нет файла офлайн-карты</string>
+    <string name="map_missing_text">Скачайте файл карты региона (.pmtiles, например BK-PHENIX-map-moscow.pmtiles из Nextcloud) и выберите его здесь. Файл копируется в приложение, дальше карта работает без сети.</string>
+    <string name="map_importing">Копирую карту: %1$d МБ</string>
+    <string name="map_import">Выбрать файл карты</string>
+    <string name="map_reimport">Сменить карту</string>
+    <string name="map_anchor_set">Якорь поставлен</string>
+    <string name="map_anchor_clear">Снять якорь</string>
+    <string name="map_center">К позиции</string>
+    <string name="map_no_position">Нет позиции</string>
+    <string name="map_status">σ %1$s м · %2$s км/ч</string>
+    <string name="map_held">удержание по скорости</string>
+    <string name="map_track_stop">Стоп трека (%1$d)</string>
 </resources>

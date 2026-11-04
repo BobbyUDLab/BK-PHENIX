@@ -132,6 +132,8 @@ class PhenixRepository(
 
     fun stopLog() = logRecorder.stop()
 
+    fun flushLog() = logRecorder.flush()
+
     fun deleteLogs() = logRecorder.deleteFinished()
 
     /** Статусы источников по имени для диагностики. */

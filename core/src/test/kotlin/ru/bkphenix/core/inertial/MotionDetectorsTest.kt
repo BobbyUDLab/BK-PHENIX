@@ -31,6 +31,22 @@ class MotionDetectorsTest {
     }
 
     @Test
+    fun `шаги — ошибка счёта не больше 5 % при разном темпе, силе шага и шуме`() {
+        val rnd = Random(7)
+        for (hz in listOf(1.4, 1.8, 2.3)) for (amp in listOf(1.8, 2.5, 3.5)) {
+            val d = StepDetector()
+            val seconds = 60
+            val count = (0 until seconds * WalkSignal.RATE_HZ).count { i ->
+                val a = WalkSignal.accel(i / 100.0, hz, amp).also { it[2] += rnd.nextGaussian() * 0.3 }
+                d.update(i * 10_000_000L, a) != null
+            }
+            val truth = hz * seconds
+            val error = kotlin.math.abs(count - truth) / truth
+            assertTrue(error <= 0.05, "темп $hz Гц, амплитуда $amp: $count шагов из $truth (${"%.1f".format(error * 100)} %)")
+        }
+    }
+
+    @Test
     fun `в покое шагов нет`() {
         val d = StepDetector()
         val rnd = Random(2)

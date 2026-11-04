@@ -138,6 +138,101 @@ class ScenarioValidationTest {
         assertTrue(flagged == 1.0, "помечено ${pct(flagged)}")
     }
 
+    /**
+     * Опасно-ложная точка: ядро выдаёт её как надёжную (OK), а реальная ошибка больше 50 м и больше
+     * 5σ заявленной погрешности. Главный критерий против согласованной подмены — таких эпох нет.
+     */
+    private fun misleading(e: ScenarioEpoch, s: PhenixSolution): Boolean {
+        val p = s.point ?: return false
+        val err = p.distanceTo(e.truth)
+        return s.integrity.state == IntegrityState.OK && err > 50.0 && err > 5 * (s.accuracyM ?: 0.0)
+    }
+
+    @Test
+    fun `согласованная подмена GNSS, сети и Wi-Fi не выдаётся за надёжную`() {
+        for (kind in listOf(ScenarioKind.COORD_JUMP, ScenarioKind.COORD_DRIFT, ScenarioKind.COORD_KINEMATIC)) {
+            val r = run(gen.core(), gen.generate(kind, epochs = 400))
+            val attacked = r.filter { it.first.attack }
+            val before = r.filterNot { it.first.attack }
+            val flagged = attacked.count { (_, s) -> alarm(s) }.toDouble() / attacked.size
+            val mis = attacked.count { (e, s) -> misleading(e, s) }
+            val first = attacked.firstOrNull { (e, s) -> alarm(s) && s.point?.distanceTo(e.truth)?.let { it > 50 } != false }
+            val start = attacked.first().first.t
+            val fa = if (before.isEmpty()) null else before.count { (_, s) -> alarm(s) }.toDouble() / before.size
+            // Наибольшая ошибка точки, выданной как надёжная: предел — 3σ честного свидетеля (сота, σ 100 м).
+            val worst = attacked.filter { (_, s) -> s.integrity.state == IntegrityState.OK }
+                .maxOfOrNull { (e, s) -> s.point?.distanceTo(e.truth) ?: 0.0 } ?: 0.0
+            record(
+                kind, flagged, fa, null,
+                "опасно-ложных эпох: $mis из ${attacked.size}; макс. ошибка при «OK» ${worst.toInt()} м; " +
+                    "первая пометка через ${first?.let { it.first.t - start } ?: "—"} с",
+            )
+            if (kind == ScenarioKind.COORD_JUMP) assertTrue(mis == 0, "$kind: опасно-ложных эпох $mis")
+            assertTrue(worst <= 300.0, "$kind: ошибка при «OK» ${worst.toInt()} м")
+            if (fa != null) assertTrue(fa <= 0.01, "$kind: ложные тревоги до атаки ${pct(fa)}")
+        }
+    }
+
+    @Test
+    fun `подмена времени обнаруживается по NITZ`() {
+        // Допуск NITZ: 2 с + неопределённость меток (0,5 с); увод 50 мс/с превышает его через ~50 с.
+        for (kind in listOf(ScenarioKind.TIME_STEP, ScenarioKind.TIME_DRIFT)) {
+            val r = run(gen.core(), gen.generate(kind))
+            val attacked = r.filter { it.first.attack }
+            val start = attacked.first().first.t
+            val first = attacked.firstOrNull { (_, s) -> spoofAlarm(s) }?.first?.t?.let { it - start }
+            val after = first?.let { f -> attacked.filter { it.first.t >= start + f } }.orEmpty()
+            val det = if (after.isEmpty()) 0.0 else after.count { spoofAlarm(it.second) }.toDouble() / after.size
+            val fa = r.filterNot { it.first.attack }.count { (_, s) -> alarm(s) }.toDouble() / r.count { !it.first.attack }
+            record(kind, det, fa, null, "время до обнаружения: ${first ?: "не обнаружен"} с")
+            assertTrue(det >= 0.95, "$kind: обнаружение ${pct(det)}")
+            assertTrue(first != null && first <= 60, "$kind: обнаружено через $first с")
+            assertTrue(fa <= 0.01, "$kind: ложные тревоги ${pct(fa)}")
+        }
+    }
+
+    /**
+     * RAIM/FDE: P_md — доля эпох с ошибкой, где RAIM не сработал (ни FAULT, ни исключения плохого спутника);
+     * HMI — доля эпох без тревоги, где ошибка собственного решения больше HPL.
+     */
+    @Test
+    fun `RAIM и FDE — два плохих спутника и многолучёвость`() {
+        val g = ScenarioGenerator(badSatelliteBiasM = 200.0, multiGnss = true)
+        val two = run(g.core(), g.generate(ScenarioKind.TWO_BAD_SATELLITES))
+        val relevant = two.filter { (e, s) ->
+            val raim = s.gnss?.raim
+            e.faultySats.any { sat -> raim?.solution?.used?.contains(sat) == true || raim?.excluded?.any { it.sat == sat } == true }
+        }
+        val detected = relevant.count { (_, s) -> s.gnss!!.raim!!.status == RaimStatus.FAULT || s.gnss!!.raim!!.excluded.isNotEmpty() }
+        val pmd = 1.0 - detected.toDouble() / relevant.size
+        val hmiTwo = hmi(two)
+        record(ScenarioKind.TWO_BAD_SATELLITES, 1 - pmd, null, hplCoverage(two), "GPS+Galileo, +200 и −160 м; P_md ${pct(pmd)}; HMI ${pct(hmiTwo)}")
+        assertTrue(pmd <= 0.05, "два плохих спутника: P_md ${pct(pmd)}")
+        assertTrue(hmiTwo <= 0.001, "два плохих спутника: HMI ${pct(hmiTwo)}")
+
+        val mp = run(g.core(), g.generate(ScenarioKind.MULTIPATH))
+        val pfa = mp.count { (_, s) -> s.gnss?.raim?.status == RaimStatus.FAULT }.toDouble() / mp.size
+        val excl = mp.count { (_, s) -> s.gnss?.raim?.status == RaimStatus.EXCLUDED }.toDouble() / mp.size
+        val alarms = mp.count { (_, s) -> alarm(s) }.toDouble() / mp.size
+        val hmiMp = hmi(mp)
+        record(
+            ScenarioKind.MULTIPATH, null, alarms, hplCoverage(mp),
+            "3 низких спутника +10…60 м; FAULT ${pct(pfa)}, исключение ${pct(excl)}; HMI ${pct(hmiMp)}",
+        )
+        assertTrue(alarms <= 0.01, "многолучёвость: тревоги ${pct(alarms)}")
+        assertTrue(hmiMp <= 0.001, "многолучёвость: HMI ${pct(hmiMp)}")
+    }
+
+    private fun hmi(r: List<Pair<ScenarioEpoch, PhenixSolution>>): Double {
+        val xs = r.mapNotNull { (e, s) ->
+            val raim = s.gnss?.raim ?: return@mapNotNull null
+            val own = s.gnss?.ownSolution ?: return@mapNotNull null
+            val hpl = raim.horizontalProtectionLevelM ?: return@mapNotNull null
+            raim.status != RaimStatus.FAULT && own.point.distanceTo(e.truth) > hpl
+        }
+        return if (xs.isEmpty()) 0.0 else xs.count { it }.toDouble() / xs.size
+    }
+
     @AfterAll
     fun writeReport() {
         val md = buildString {

@@ -38,14 +38,38 @@ public class DeadReckoningSource(private val navigator: InertialNavigator = Iner
     public fun observation(realtimeMillis: Long, wallMillis: Long): PositionObservation? {
         val e = navigator.estimate(realtimeMillis) ?: return null
         if (e.sinceFixMillis == 0L) return null
-        return PositionObservation(PositionSource.DEAD_RECKONING, e.point, e.sigmaM, wallMillis)
+        return PositionObservation(PositionSource.DEAD_RECKONING, e.point, e.sigmaM, wallMillis, gnssDerived = !anchorIndependent)
     }
 
-    /** Подтягивает счисление к итоговому решению эпохи. Возвращает true, если решение принято фильтром. */
+    /**
+     * Последняя привязка счисления подтверждена независимо от GNSS (≥ 2 сильных голоса без самого
+     * счисления, например GNSS + соты, или якорь). Пока нет — счисление лишь продолжает GNSS и не
+     * может её подтвердить ([PositionObservation.gnssDerived]).
+     */
+    public val isAnchorIndependent: Boolean
+        @Synchronized get() = anchorIndependent
+
+    private var anchorIndependent = false
+
+    /**
+     * Подтягивает счисление к итоговому решению эпохи. Возвращает true, если решение принято фильтром.
+     *
+     * @param independentlyConfirmed решение подтверждено независимо от GNSS и от самого счисления
+     *   (кворум без группы «Датчики/счисление» или якорь). Без этого счисление помечается как
+     *   производное от GNSS, иначе оно «подтверждало» бы GNSS её же прошлым решением.
+     */
     @Synchronized
-    public fun onSolution(point: GeoPoint?, accuracyM: Double?, state: IntegrityState, realtimeMillis: Long): Boolean {
+    public fun onSolution(
+        point: GeoPoint?,
+        accuracyM: Double?,
+        state: IntegrityState,
+        realtimeMillis: Long,
+        independentlyConfirmed: Boolean = false,
+    ): Boolean {
         if (point == null || state in UNTRUSTED) return false
-        return navigator.onFix(point, accuracyM ?: DEFAULT_SIGMA_M, realtimeMillis)
+        val accepted = navigator.onFix(point, accuracyM ?: DEFAULT_SIGMA_M, realtimeMillis)
+        if (accepted) anchorIndependent = independentlyConfirmed
+        return accepted
     }
 
     private companion object {

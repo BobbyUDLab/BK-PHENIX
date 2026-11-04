@@ -38,6 +38,8 @@ import ru.bkphenix.app.ui.track.TrackCard
 import ru.bkphenix.core.geo.ErrorCircle
 import ru.bkphenix.core.anchor.AnchorState
 import ru.bkphenix.core.integrity.IntegrityState
+import ru.bkphenix.core.integrity.PointTrust
+import ru.bkphenix.core.integrity.PointTrustLevel
 
 @Composable
 fun CoordinateScreen(viewModel: CoordinateViewModel, locationGranted: Boolean, onRequestPermissions: () -> Unit) {
@@ -56,8 +58,12 @@ fun CoordinateScreen(viewModel: CoordinateViewModel, locationGranted: Boolean, o
             }
         }
         SectionCard(stringResource(R.string.section_position)) {
-            InfoRow(stringResource(R.string.label_latitude), solution?.point?.latitude?.fmt(6))
-            InfoRow(stringResource(R.string.label_longitude), solution?.point?.longitude?.fmt(6))
+            val trust = PointTrust.of(solution)
+            // Точка без кворума не должна выглядеть надёжной: координаты приглушены, рядом — уровень доверия и причина.
+            val coordColor = if (trust.level == PointTrustLevel.RELIABLE) Color.Unspecified else Muted
+            InfoRow(stringResource(R.string.label_trust), "${trust.level.displayName}\n${trust.reason}", trust.level.color())
+            InfoRow(stringResource(R.string.label_latitude), solution?.point?.latitude?.fmt(6), coordColor)
+            InfoRow(stringResource(R.string.label_longitude), solution?.point?.longitude?.fmt(6), coordColor)
             InfoRow(
                 stringResource(R.string.label_accuracy),
                 solution?.accuracyM?.let { stringResource(R.string.accuracy_r95, ErrorCircle.radius(it).fmt(1), it.fmt(1)) },
@@ -164,6 +170,16 @@ private fun IntegrityState.color(): Color = when (this) {
     IntegrityState.OK -> Ok
     IntegrityState.NO_DATA, IntegrityState.INCONSISTENT, IntegrityState.SUSPICIOUS, IntegrityState.UNCONFIRMED -> Warn
     else -> Bad
+}
+
+private val Muted: Color @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+
+@Composable
+private fun PointTrustLevel.color(): Color = when (this) {
+    PointTrustLevel.RELIABLE -> Ok
+    PointTrustLevel.LIMITED, PointTrustLevel.UNRELIABLE -> Warn
+    PointTrustLevel.ALARM -> Bad
+    PointTrustLevel.NONE -> Color.Unspecified
 }
 
 @Composable

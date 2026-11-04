@@ -22,6 +22,7 @@ import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.model.PositionSource
 import ru.bkphenix.core.track.HeldPosition
 import ru.bkphenix.core.track.TrackPoint
+import ru.bkphenix.core.roads.MatchResult
 
 /** Слои приложения поверх базовой карты: трек, источники, якорь, позиция с кругом ошибки. */
 internal object MapLayers {
@@ -29,13 +30,14 @@ internal object MapLayers {
     private const val SOURCES = "bk-sources"
     private const val ANCHOR = "bk-anchor"
     private const val POSITION = "bk-position"
+    private const val ROAD = "bk-road"
 
     /** Цвета слоёв приложения; на тёмной карте — циан и оранжевый бренда, обводки чёрные. */
     private var dark = false
 
     fun install(style: Style, oled: Boolean = false) {
         dark = oled
-        listOf(TRACK, SOURCES, ANCHOR, POSITION).forEach { style.addSource(GeoJsonSource(it)) }
+        listOf(TRACK, SOURCES, ANCHOR, ROAD, POSITION).forEach { style.addSource(GeoJsonSource(it)) }
         style.addLayer(
             LineLayer(TRACK, TRACK).withProperties(
                 PropertyFactory.lineColor(if (oled) PhenixPalette.hex(PhenixPalette.ORANGE) else "#E0457B"),
@@ -43,6 +45,23 @@ internal object MapLayers {
                 PropertyFactory.lineOpacity(0.85f),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+            ),
+        )
+        // Привязка к дороге: тонкая линия от исходной точки к точке на дороге и маленький ромб-кружок.
+        // Исходная точка остаётся главным маркером — привязка её не заменяет.
+        style.addLayer(
+            LineLayer("$ROAD-link", ROAD).withFilter(Expression.eq(Expression.geometryType(), "LineString")).withProperties(
+                PropertyFactory.lineColor(ROAD_COLOR),
+                PropertyFactory.lineWidth(1.5f),
+                PropertyFactory.lineDasharray(arrayOf(1f, 1.5f)),
+            ),
+        )
+        style.addLayer(
+            CircleLayer("$ROAD-dot", ROAD).withFilter(Expression.eq(Expression.geometryType(), "Point")).withProperties(
+                PropertyFactory.circleColor(ROAD_COLOR),
+                PropertyFactory.circleRadius(4.5f),
+                PropertyFactory.circleStrokeColor(if (oled) Color.BLACK else Color.WHITE),
+                PropertyFactory.circleStrokeWidth(1.5f),
             ),
         )
         // Круги ошибки (полигоны в метрах) и центры точек — отдельными слоями по типу геометрии.
@@ -86,7 +105,12 @@ internal object MapLayers {
         )
     }
 
-    fun update(style: Style, solution: PhenixSolution?, held: HeldPosition?, track: List<TrackPoint>) {
+    fun update(style: Style, solution: PhenixSolution?, held: HeldPosition?, track: List<TrackPoint>, road: MatchResult? = null) {
+        style.getSourceAs<GeoJsonSource>(ROAD)?.setGeoJson(
+            FeatureCollection.fromFeatures(
+                road?.matched?.let { m -> listOf(Feature.fromGeometry(LineString.fromLngLats(listOf(road.raw.toPoint(), m.toPoint()))), Feature.fromGeometry(m.toPoint())) }.orEmpty(),
+            ),
+        )
         style.getSourceAs<GeoJsonSource>(TRACK)?.setGeoJson(
             if (track.size < 2) FeatureCollection.fromFeatures(emptyList())
             else FeatureCollection.fromFeature(Feature.fromGeometry(LineString.fromLngLats(track.map { it.point.toPoint() }))),
@@ -136,6 +160,7 @@ internal object MapLayers {
 
     private const val CIRCLE_STEPS = 48
     private val POSITION_COLOR get() = if (dark) PhenixPalette.hex(PhenixPalette.CYAN) else "#1A73E8"
+    private val ROAD_COLOR get() = if (dark) PhenixPalette.hex(PhenixPalette.GOLD) else "#6D4C41"
     private val HELD_COLOR get() = if (dark) "#A9B8CC" else "#8A8F98"
     private val ANCHOR_COLOR get() = if (dark) "#C792EA" else "#7B1FA2"
     private val REJECTED get() = if (dark) PhenixPalette.hex(PhenixPalette.Oled.STATUS_BAD) else "#D93A3A"

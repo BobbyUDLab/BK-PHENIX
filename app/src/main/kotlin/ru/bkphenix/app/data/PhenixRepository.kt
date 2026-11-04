@@ -349,8 +349,9 @@ class PhenixRepository(
         // Прогноз счисления берём до учёта решения этой эпохи, чтобы он проверял его независимо.
         val rt = realtime()
         deadReckoning.observation(rt, now)?.let(aggregator::put)
+        val fresh = aggregator.fresh(now)
         val solved = core.solve(
-            observations = aggregator.fresh(now),
+            observations = fresh,
             nowMillis = now,
             timeObservations = time,
             rawGnss = raw,
@@ -379,6 +380,7 @@ class PhenixRepository(
                     cells = _cells.value,
                     sensors = _sensors.value.values,
                     networkTime = networkTimeSample,
+                    observations = fresh,
                 ),
             )
         }

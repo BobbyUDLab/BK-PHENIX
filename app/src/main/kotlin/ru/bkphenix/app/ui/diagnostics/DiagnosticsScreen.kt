@@ -40,6 +40,7 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val log by viewModel.logState.collectAsStateWithLifecycle()
     val rinex by viewModel.rinexInfo.collectAsStateWithLifecycle()
+    val cellDb by viewModel.cellDatabase.collectAsStateWithLifecycle()
     val context = LocalContext.current
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -79,6 +80,18 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
                     InfoRow("Спутников", "${r.satellites} (записей ${r.records})")
                     InfoRow("Системы", r.systems.ifEmpty { "—" })
                     InfoRow("Файл", "${formatUtc(r.fileTimeMillis)} · ${r.origin}")
+                }
+            }
+        }
+        item {
+            SectionCard("База сотовых вышек") {
+                val c = cellDb
+                if (c == null) {
+                    EmptyHint("Не загружена")
+                } else {
+                    InfoRow("Сот", c.cells.toString())
+                    InfoRow("Регион", c.region)
+                    InfoRow("Данные", c.source)
                 }
             }
         }

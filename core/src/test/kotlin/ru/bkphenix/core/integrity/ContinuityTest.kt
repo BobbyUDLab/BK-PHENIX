@@ -113,6 +113,33 @@ class ContinuityTest {
     }
 
     @Test
+    fun `восстановление без независимых источников помечается как неподтверждённое`() {
+        val m = ContinuityMonitor()
+        repeat(10) { t -> m.check(listOf(PositionObservation(PositionSource.GNSS, start, 3.0, 0)), t * 1000L) }
+        val moved = start.offset(2_000.0, 45.0)
+        // Сеть платформы и счисление от фикса GNSS не свидетели: они повторяют GNSS.
+        fun epoch(t: Int, cell: Boolean) = m.check(
+            listOfNotNull(
+                PositionObservation(PositionSource.GNSS, moved, 3.0, 0),
+                PositionObservation(PositionSource.NETWORK, moved, 30.0, 0),
+                PositionObservation(PositionSource.DEAD_RECKONING, moved, 20.0, 0, gnssDerived = true),
+                if (cell) PositionObservation(PositionSource.CELL, moved.offset(40.0, 0.0), 100.0, 0) else null,
+            ),
+            t * 1000L,
+        )
+        var last: ContinuityResult? = null
+        for (t in 10 until 20) last = epoch(t, cell = false)
+        assertTrue(last!!.dropped.isEmpty(), "GNSS так и не вернулся")
+        assertTrue(m.unconfirmedRecovery)
+        // После удержания тревоги остаётся состояние «восстановлено без подтверждения».
+        last = epoch(20 + 61, cell = false)
+        assertEquals(IntegrityState.UNCONFIRMED, last.report.state)
+        // Первая согласная сота снимает пометку.
+        last = epoch(20 + 62, cell = true)
+        assertEquals(IntegrityState.OK, last.report.state)
+    }
+
+    @Test
     fun `подмена в 2 км против сети не восстанавливается`() {
         val m = ContinuityMonitor()
         repeat(10) { t -> m.check(listOf(PositionObservation(PositionSource.GNSS, start, 3.0, 0)), t * 1000L) }

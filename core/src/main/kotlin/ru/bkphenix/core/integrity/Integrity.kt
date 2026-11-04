@@ -12,6 +12,7 @@ public enum class IntegrityState(public val description: String) {
     OK("Источники согласованы"),
     NO_DATA("Нет данных о местоположении"),
     SUSPICIOUS("Источники согласованы, но подтверждение недостаточно"),
+    UNCONFIRMED("Восстановлено без независимого подтверждения"),
     INCONSISTENT("Источники не согласуются между собой"),
     GNSS_LOST("ГНСС недоступна: возможно глушение"),
     NAV_DATA_CORRUPTED("Ошибки чётности навигационных сообщений"),
@@ -78,13 +79,13 @@ public class ConsistencyIntegrityEngine : IntegrityEngine {
         }
         val comparison = context.comparison
         if (comparison.estimate != null && !comparison.hasQuorum) {
-            val weak = comparison.votes.filter { v -> v.observations.all { it.source.mayUseGnss } }
+            val weak = comparison.votes.filter { v -> v.observations.none { it.isIndependentEvidence } }
             val why = buildString {
                 append("Итог подтверждают ${comparison.strongConfirmations} незав. групп(ы), нужно ${ComparisonResult.QUORUM}")
                 if (weak.isNotEmpty()) {
                     append("; не засчитано: ")
                     append(weak.flatMap { it.observations }.joinToString { it.source.displayName })
-                    append(" (может опираться на GNSS)")
+                    append(" (повторяет GNSS)")
                 }
             }
             reports += IntegrityReport(IntegrityState.SUSPICIOUS, listOf(why))

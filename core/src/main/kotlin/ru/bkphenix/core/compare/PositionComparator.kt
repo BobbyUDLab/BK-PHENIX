@@ -2,6 +2,7 @@ package ru.bkphenix.core.compare
 
 import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.model.PositionObservation
+import ru.bkphenix.core.model.SourceGroup
 import kotlin.math.abs
 import kotlin.math.sqrt
 
@@ -22,10 +23,18 @@ public data class ComparisonResult(
     val independentConfirmations: Int get() = votes.size
 
     /**
-     * Голоса, которым можно верить как независимым: голос, состоящий только из источников,
-     * способных опираться на GNSS ([ru.bkphenix.core.model.PositionSource.mayUseGnss]), не считается.
+     * Голоса, которым можно верить как независимым: голос, состоящий только из источников, которые
+     * повторяют GNSS (сеть/Fused платформы, счисление от фикса GNSS — см.
+     * [PositionObservation.isIndependentEvidence]), не считается.
      */
-    val strongConfirmations: Int get() = votes.count { v -> v.observations.any { !it.source.mayUseGnss } }
+    val strongConfirmations: Int get() = Independence.strongCount(votes)
+
+    /** Голоса, не зависящие от GNSS ни прямо, ни косвенно: только они могут опровергнуть или подтвердить GNSS. */
+    val gnssIndependentConfirmations: Int get() = votes.count { v -> v.observations.any { it.isGnssIndependent } }
+
+    /** Сильные голоса без учёта группы [group]: например, для привязки счисления — без самого счисления. */
+    public fun strongConfirmationsExcluding(group: SourceGroup): Int =
+        votes.filter { group !in it.groups }.let(Independence::strongCount)
 
     /** Кворум: итог поддерживают не менее двух сильных независимых групп. */
     val hasQuorum: Boolean get() = strongConfirmations >= QUORUM
@@ -37,8 +46,11 @@ public data class ComparisonResult(
 
 /**
  * Компаратор: сравнивает источники попарно и выбирает взаимно согласованное подмножество
- * с наибольшим числом **независимых голосов** (см. [Independence]); источники одной группы
- * зависимости голосуют один раз. Остальные наблюдения отсекаются как ложные.
+ * с наибольшим числом **сильных независимых голосов** (см. [Independence]); источники одной группы
+ * зависимости голосуют один раз. Голоса, которые лишь повторяют GNSS (сеть/Fused платформы,
+ * счисление от фикса GNSS), учитываются только при равенстве сильных: иначе согласованная подмена
+ * GNSS «покупала» бы большинство за счёт зависимых от неё источников. Остальные наблюдения
+ * отсекаются как ложные.
  *
  * Два наблюдения согласованы, если расстояние между ними не превышает
  * `gateSigma · √(σ₁² + σ₂²)`. При равенстве голосов выигрывает подмножество с большим
@@ -100,6 +112,7 @@ public class PositionComparator(
         val compatible = Array(n) { i -> BooleanArray(n) { j -> i == j || areConsistent(obs[i], obs[j]) } }
         val start = required ?: 0
         var bestMask = 1 shl start
+        var bestStrong = Independence.strongCount(Independence.votes(listOf(obs[start])))
         var bestVotes = 1
         var bestWeight = obs[start].effectiveWeight
         for (mask in 1 until (1 shl n)) {
@@ -107,15 +120,19 @@ public class PositionComparator(
             val members = (0 until n).filter { mask and (1 shl it) != 0 }
             val clique = members.all { i -> members.all { j -> compatible[i][j] } }
             if (!clique) continue
-            val votes = Independence.count(members.map { obs[it] })
+            val memberVotes = Independence.votes(members.map { obs[it] })
+            val strong = Independence.strongCount(memberVotes)
+            val votes = memberVotes.size
             // Вес — по голосам (лучшее наблюдение голоса), чтобы дубли одной группы не перевешивали.
-            val weight = Independence.votes(members.map { obs[it] }).sumOf { v -> v.observations.maxOf { it.effectiveWeight } }
+            val weight = memberVotes.sumOf { v -> v.observations.maxOf { it.effectiveWeight } }
             val sameWeight = abs(weight - bestWeight) <= bestWeight * 1e-9
-            val better = votes > bestVotes ||
-                (votes == bestVotes && !sameWeight && weight > bestWeight) ||
-                (votes == bestVotes && sameWeight && Integer.bitCount(mask) > Integer.bitCount(bestMask))
+            val better = strong > bestStrong ||
+                (strong == bestStrong && votes > bestVotes) ||
+                (strong == bestStrong && votes == bestVotes && !sameWeight && weight > bestWeight) ||
+                (strong == bestStrong && votes == bestVotes && sameWeight && Integer.bitCount(mask) > Integer.bitCount(bestMask))
             if (better) {
                 bestMask = mask
+                bestStrong = strong
                 bestVotes = votes
                 bestWeight = weight
             }

@@ -66,12 +66,17 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
     private var rejectStreak = 0
     private var lastRejected: PositionObservation? = null
     private var lastRejectedMillis = 0L
+    private var unconfirmed = false
+
+    /** GNSS восстановлена после отсева, но независимый источник её ещё не подтвердил. */
+    public val unconfirmedRecovery: Boolean get() = unconfirmed
 
     public fun reset() {
         origin = null
         cusum = 0.0
         alarmUntil = Long.MIN_VALUE
         alarmReason = null
+        unconfirmed = false
         clearStreak()
     }
 
@@ -82,7 +87,9 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
 
     public fun check(observations: List<PositionObservation>, nowMillis: Long): ContinuityResult {
         val gnssGroup = observations.filter { SourceGroup.GNSS_SIGNAL in it.origin }
-        val independent = observations.filter { SourceGroup.GNSS_SIGNAL !in it.origin }
+        // Свидетели против GNSS — только источники, не зависящие от неё ни прямо, ни косвенно:
+        // сеть/Fused платформы и счисление от фикса GNSS при подмене уводятся вместе с ней.
+        val independent = observations.filter { it.isGnssIndependent }
         val reasons = mutableListOf<String>()
         val gnss = gnssGroup.minByOrNull { it.accuracyM }
         var dropped = emptyList<PositionObservation>()
@@ -134,16 +141,26 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
                     init(gnss, nowMillis)
                     dropped = emptyList()
                     clearStreak()
+                    // Без независимых свидетелей восстановление держится только на самой GNSS.
+                    unconfirmed = independent.isEmpty()
                 }
             }
             // CUSUM — только по абсолютным источникам, не связанным с GNSS: счисление дрейфует и
             // стартует от той же позиции, а «Сеть» платформы может подмешивать GNSS. На полевом
             // тесте 04.11 они давали ложный «плавный увод» почти всю прогулку.
-            val absolute = independent.filter { !it.source.mayUseGnss && SourceGroup.INERTIAL !in it.origin }
+            val absolute = independent.filter { SourceGroup.INERTIAL !in it.origin }
             if (dropped.isEmpty() && absolute.isNotEmpty()) updateCusum(gnss, absolute)
+            if (unconfirmed && dropped.isEmpty() && independent.isNotEmpty() && agrees(gnss, independent)) unconfirmed = false
         }
         if (nowMillis <= alarmUntil) alarmReason?.let { reasons += it }
-        val report = if (reasons.isEmpty()) IntegrityReport.OK else IntegrityReport(IntegrityState.SPOOFING_SUSPECTED, reasons)
+        val report = when {
+            reasons.isNotEmpty() -> IntegrityReport(IntegrityState.SPOOFING_SUSPECTED, reasons)
+            unconfirmed -> IntegrityReport(
+                IntegrityState.UNCONFIRMED,
+                listOf("ГНСС восстановлена после отсева без независимого подтверждения (нет сот, Wi-Fi, якоря)"),
+            )
+            else -> IntegrityReport.OK
+        }
         return ContinuityResult(observations - dropped.toSet(), dropped, report, chi2, cusum)
     }
 

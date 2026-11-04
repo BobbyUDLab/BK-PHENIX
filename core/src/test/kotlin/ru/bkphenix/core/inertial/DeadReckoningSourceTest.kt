@@ -38,4 +38,13 @@ class DeadReckoningSourceTest {
         assertFalse(dr.onSolution(null, null, IntegrityState.OK, 1_000))
         assertNull(dr.observation(2_000, 2_000))
     }
+
+    @Test
+    fun `счисление от фикса GNSS без независимого подтверждения помечено как производное`() {
+        val dr = DeadReckoningSource()
+        assertTrue(dr.onSolution(p, 5.0, IntegrityState.SUSPICIOUS, 1_000))
+        assertTrue(dr.observation(2_000, 2_000)!!.gnssDerived)
+        assertTrue(dr.onSolution(p, 5.0, IntegrityState.OK, 3_000, independentlyConfirmed = true))
+        assertFalse(dr.observation(4_000, 4_000)!!.gnssDerived)
+    }
 }

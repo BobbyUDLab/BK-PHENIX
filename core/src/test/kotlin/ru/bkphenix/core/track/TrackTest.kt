@@ -12,15 +12,46 @@ class TrackTest {
     @Test
     fun `прореживание пропускает стоянку и берёт движение`() {
         val t = TrackThinner(minDistanceM = 3.0, maxIntervalMillis = 30_000)
-        assertTrue(t.accept(TrackPoint(0, start, 2.0)))
-        assertFalse(t.accept(TrackPoint(1_000, start.offset(1.0, 90.0), 2.0)))
-        assertTrue(t.accept(TrackPoint(2_000, start.offset(5.0, 90.0), 2.0)))
-        assertFalse(t.accept(TrackPoint(3_000, start.offset(9.0, 90.0), 20.0)), "шаг меньше половины погрешности")
-        assertTrue(t.accept(TrackPoint(40_000, start.offset(5.0, 90.0), 2.0)), "по времени")
+        assertTrue(t.accept(TrackPoint(0, start, 2.0, "OK")))
+        assertFalse(t.accept(TrackPoint(1_000, start.offset(1.0, 90.0), 2.0, "OK")))
+        assertTrue(t.accept(TrackPoint(2_000, start.offset(5.0, 90.0), 2.0, "OK")))
+        assertFalse(t.accept(TrackPoint(3_000, start.offset(9.0, 90.0), 20.0, "OK")), "шаг меньше половины погрешности")
+        assertTrue(t.accept(TrackPoint(40_000, start.offset(5.0, 90.0), 2.0, "OK")), "по времени")
     }
 
     @Test
-    fun `GPX 1_1 с временем, высотой и расширениями`() {
+    fun `недостоверная эпоха отбрасывается и сбрасывает предыдущую точку`() {
+        val t = TrackThinner()
+        assertTrue(t.accept(TrackPoint(1_000, start, 5.0, "OK")))
+        assertFalse(t.accept(TrackPoint(2_000, start.offset(20.0, 90.0), 5.0, "INCONSISTENT")))
+        assertTrue(t.accept(TrackPoint(3_000, start.offset(5_000.0, 90.0), 5.0, "OK")))
+    }
+
+    @Test
+    fun `невозможный скачок не попадает в трек и обрывает непрерывность`() {
+        val t = TrackThinner()
+        assertTrue(t.accept(TrackPoint(1_000, start, 5.0, "OK")))
+        assertFalse(t.accept(TrackPoint(2_000, start.offset(13_800.0, 0.0), 5.0, "OK")))
+        assertTrue(t.accept(TrackPoint(3_000, start.offset(15.0, 90.0), 5.0, "OK")))
+    }
+
+    @Test
+    fun `GPX фильтрует недостоверные точки и начинает новый сегмент после скачка`() {
+        val gpx = GpxWriter.write(
+            "Трек",
+            listOf(
+                TrackPoint(1_700_000_000_000, start, 3.25, "OK"),
+                TrackPoint(1_700_000_001_000, GeoPoint(55.8, 37.0), null, "SPOOFING_SUSPECTED"),
+                TrackPoint(1_700_000_001_000, GeoPoint(55.0, 37.0), null, "OK"),
+            ),
+        )
+        assertEquals(2, Regex("<trkseg>").findAll(gpx).count())
+        assertEquals(2, Regex("<trkpt ").findAll(gpx).count())
+        assertFalse("55.8000000" in gpx)
+    }
+
+    @Test
+    fun `GPX 1_1 с временем высотой и расширениями`() {
         val gpx = GpxWriter.write(
             "Прогулка <1>",
             listOf(TrackPoint(1_700_000_000_000, start, 3.25, "OK"), TrackPoint(1_700_000_001_000, GeoPoint(55.0, 37.0), null)),

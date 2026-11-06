@@ -18,6 +18,9 @@ public data class ConstellationReplayStats(
     val epochsWithPrr: Int,
     val epochsWithPrrAndUncertainty: Int,
     val medianPrrUncertaintyMps: Double?,
+    val medianAbsPrrMps: Double?,
+    val dualBandPrrPairs: Int,
+    val medianDualBandPrrDeltaMps: Double?,
     val standaloneWlsEpochs: Int,
 )
 
@@ -70,6 +73,23 @@ public object GnssReplayDiagnosticsAnalyzer {
             val uncertainties = measurements.mapNotNull { m ->
                 m.pseudorangeRateUncertaintyMps?.takeIf { it.isFinite() && it >= 0.0 }
             }.sorted()
+            val absoluteRates = measurements.mapNotNull { m -> m.pseudorangeRateMps?.takeIf { it.isFinite() }?.let(kotlin.math::abs) }.sorted()
+            val dualBandDeltas = log.epochs.flatMap { epoch ->
+                epoch.measurements.asSequence().filter { it.sat.constellation == system && it.pseudorangeRateMps?.isFinite() == true }
+                    .groupBy { it.sat }
+                    .values.flatMap { sameSatellite ->
+                        val ratesByBand = sameSatellite.groupBy { it.band }
+                            .mapValues { (_, values) -> values.mapNotNull { it.pseudorangeRateMps }.average() }
+                        ratesByBand.entries.flatMapIndexed { index, first ->
+                            ratesByBand.entries.drop(index + 1).map { second -> kotlin.math.abs(first.value - second.value) }
+                        }
+                    }
+            }.sorted()
+            fun median(values: List<Double>): Double? = when {
+                values.isEmpty() -> null
+                values.size % 2 == 1 -> values[values.size / 2]
+                else -> (values[values.size / 2 - 1] + values[values.size / 2]) / 2.0
+            }
             ConstellationReplayStats(
                 constellation = system,
                 measurementCount = measurements.size,
@@ -79,13 +99,10 @@ public object GnssReplayDiagnosticsAnalyzer {
                     it.sat.constellation == system && it.pseudorangeRateMps?.isFinite() == true &&
                         it.pseudorangeRateUncertaintyMps?.let { u -> u.isFinite() && u >= 0.0 } == true
                 } },
-                medianPrrUncertaintyMps = uncertainties.let {
-                    when {
-                        it.isEmpty() -> null
-                        it.size % 2 == 1 -> it[it.size / 2]
-                        else -> (it[it.size / 2 - 1] + it[it.size / 2]) / 2.0
-                    }
-                },
+                medianPrrUncertaintyMps = median(uncertainties),
+                medianAbsPrrMps = median(absoluteRates),
+                dualBandPrrPairs = dualBandDeltas.size,
+                medianDualBandPrrDeltaMps = median(dualBandDeltas),
                 standaloneWlsEpochs = solutions.getValue(system).size,
             )
         }

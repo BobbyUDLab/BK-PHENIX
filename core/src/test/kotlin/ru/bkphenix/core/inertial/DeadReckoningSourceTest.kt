@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import ru.bkphenix.core.PhenixCore
+import ru.bkphenix.core.model.PositionObservation
 import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.integrity.IntegrityState
 import ru.bkphenix.core.model.PositionSource
@@ -18,10 +20,14 @@ class DeadReckoningSourceTest {
         assertNull(DeadReckoningSource().observation(1_000, 1_000))
     }
 
+    /** Три согласованных фикса — минимальная основа для счисления. */
+    private fun seeded(state: IntegrityState = IntegrityState.SUSPICIOUS): DeadReckoningSource = DeadReckoningSource().also { dr ->
+        for (t in listOf(0L, 500L, 1_000L)) assertTrue(dr.onSolution(p, 5.0, state, t))
+    }
+
     @Test
     fun `наблюдение — прогноз группы датчиков с растущей погрешностью`() {
-        val dr = DeadReckoningSource()
-        assertTrue(dr.onSolution(p, 5.0, IntegrityState.SUSPICIOUS, 1_000))
+        val dr = seeded()
         val o1 = dr.observation(2_000, 50_000)!!
         val o2 = dr.observation(6_000, 54_000)!!
         assertEquals(PositionSource.DEAD_RECKONING, o1.source)
@@ -41,10 +47,36 @@ class DeadReckoningSourceTest {
 
     @Test
     fun `счисление от фикса GNSS без независимого подтверждения помечено как производное`() {
-        val dr = DeadReckoningSource()
-        assertTrue(dr.onSolution(p, 5.0, IntegrityState.SUSPICIOUS, 1_000))
+        val dr = seeded()
         assertTrue(dr.observation(2_000, 2_000)!!.gnssDerived)
         assertTrue(dr.onSolution(p, 5.0, IntegrityState.OK, 3_000, independentlyConfirmed = true))
         assertFalse(dr.observation(4_000, 4_000)!!.gnssDerived)
+    }
+
+    @Test
+    fun `один фикс не запускает счисление — первый фикс бывает кэшированным`() {
+        val dr = DeadReckoningSource()
+        assertTrue(dr.onSolution(p, 5.0, IntegrityState.SUSPICIOUS, 1_000))
+        assertNull(dr.observation(2_000, 2_000))
+    }
+
+    @Test
+    fun `итог из одного счисления не подтягивает счисление`() {
+        val dr = seeded()
+        val core = PhenixCore()
+        val own = dr.observation(2_000, 2_000)!!
+        val solution = core.solve(listOf(own), 2_000)
+        assertEquals(listOf(PositionSource.DEAD_RECKONING), solution.comparison.accepted.map { it.source })
+        assertFalse(dr.onSolution(solution, 2_000))
+        // Погрешность продолжает расти, а не сжимается к собственной оценке.
+        assertTrue(dr.observation(8_000, 8_000)!!.accuracyM > own.accuracyM)
+    }
+
+    @Test
+    fun `итог с другими источниками подтягивает счисление`() {
+        val dr = seeded()
+        val gnss = PositionObservation(PositionSource.GNSS, p, 5.0, 2_000)
+        val solution = PhenixCore().solve(listOf(gnss), 2_000)
+        assertTrue(dr.onSolution(solution, 2_000))
     }
 }

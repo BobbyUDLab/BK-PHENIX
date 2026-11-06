@@ -56,6 +56,14 @@ class MapViewModel(
     private val motion = MotionModel(MotionMode.CAR).also { repository.motionMode = it.mode }
     private val _motionMode = MutableStateFlow(motion.mode)
     val motionMode: StateFlow<MotionMode> = _motionMode.asStateFlow()
+    /** Карта всегда севером вверх (по умолчанию) или поворачивается по курсу в «Авто». */
+    private val _northUp = MutableStateFlow(true)
+    val northUp: StateFlow<Boolean> = _northUp.asStateFlow()
+
+    fun setNorthUp(value: Boolean) {
+        _northUp.value = value
+    }
+
     private val _viewMode = MutableStateFlow(MapViewMode.LOCATION)
     val viewMode: StateFlow<MapViewMode> = _viewMode.asStateFlow()
 

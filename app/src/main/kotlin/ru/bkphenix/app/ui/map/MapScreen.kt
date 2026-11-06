@@ -10,8 +10,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
@@ -26,6 +28,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
@@ -103,7 +107,10 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
     val roadPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(viewModel::importRoads)
     }
+    val northUp by viewModel.northUp.collectAsStateWithLifecycle()
     var follow by remember { mutableStateOf(true) }
+    var placingAnchor by remember { mutableStateOf(false) }
+    var bearing by remember { mutableStateOf(0.0) }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var style by remember { mutableStateOf<Style?>(null) }
 
@@ -113,6 +120,9 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
             getMapAsync { m ->
                 m.uiSettings.isAttributionEnabled = true
                 m.uiSettings.isLogoEnabled = false
+                // Свой компас: кнопка «Север вверх / по курсу» (встроенный скрывается при севере вверху).
+                m.uiSettings.isCompassEnabled = false
+                m.addOnCameraMoveListener { bearing = m.cameraPosition.bearing }
                 m.cameraPosition = CameraPosition.Builder().target(LatLng(MOSCOW.latitude, MOSCOW.longitude)).zoom(10.0).build()
                 m.addOnCameraMoveStartedListener { reason ->
                     if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) follow = false
@@ -145,16 +155,25 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
     LaunchedEffect(style, solution, held, track, road) {
         style?.let { MapLayers.update(it, solution, held, track, road.takeIf { motionMode != MotionMode.NONE }) }
     }
-    // Камера: в режиме «Местоположение» следует за позицией; в «Авто» поворачивается по курсу.
-    LaunchedEffect(map, held, follow, viewMode, motionMode) {
+    // «Север вверх»: поворот пальцами выключен, чтобы карта случайно не разворачивалась.
+    LaunchedEffect(map, northUp) {
+        val m = map ?: return@LaunchedEffect
+        m.uiSettings.isRotateGesturesEnabled = !northUp
+        if (northUp && m.cameraPosition.bearing != 0.0) {
+            m.easeCamera(CameraUpdateFactory.bearingTo(0.0), EASE_MILLIS)
+        }
+    }
+    // Камера: в режиме «Местоположение» следует за позицией; в «Авто» — по курсу, если не «Север вверх».
+    LaunchedEffect(map, held, follow, viewMode, motionMode, northUp, placingAnchor) {
         val m = map ?: return@LaunchedEffect
         val h = held ?: return@LaunchedEffect
-        if (viewMode != MapViewMode.LOCATION || !follow) return@LaunchedEffect
+        if (viewMode != MapViewMode.LOCATION || !follow || placingAnchor) return@LaunchedEffect
         val camera = CameraPosition.Builder().target(LatLng(h.point.latitude, h.point.longitude))
         when (motionMode) {
-            MotionMode.CAR -> camera.zoom(maxOf(m.cameraPosition.zoom, 15.0)).bearing(h.bearingDeg ?: m.cameraPosition.bearing)
-            MotionMode.WALK -> camera.zoom(maxOf(m.cameraPosition.zoom, 16.5)).bearing(0.0)
-            MotionMode.NONE -> camera.zoom(m.cameraPosition.zoom)
+            MotionMode.CAR -> camera.zoom(maxOf(m.cameraPosition.zoom, 15.0))
+                .bearing(if (northUp) 0.0 else h.bearingDeg ?: m.cameraPosition.bearing)
+            MotionMode.WALK -> camera.zoom(maxOf(m.cameraPosition.zoom, 16.5)).bearing(if (northUp) 0.0 else m.cameraPosition.bearing)
+            MotionMode.NONE -> camera.zoom(m.cameraPosition.zoom).bearing(if (northUp) 0.0 else m.cameraPosition.bearing)
         }
         m.easeCamera(CameraUpdateFactory.newCameraPosition(camera.build()), EASE_MILLIS)
     }
@@ -168,6 +187,16 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
 
     Box(Modifier.fillMaxSize()) {
         AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
+        if (placingAnchor) {
+            // Перекрестие в центре карты: якорь ставится туда, куда вы сдвинули карту.
+            Text(
+                "+",
+                Modifier.align(Alignment.Center),
+                style = MaterialTheme.typography.displayMedium,
+                fontWeight = FontWeight.Light,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
         Surface(
             Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(8.dp),
             shape = MaterialTheme.shapes.medium,
@@ -208,11 +237,41 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
             verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.End,
         ) {
-            if (!follow && viewMode == MapViewMode.LOCATION) {
-                SmallFloatingActionButton(onClick = { follow = true }) { Text(stringResource(R.string.map_center), Modifier.padding(8.dp)) }
+            // Компас: стрелка показывает север; нажатие — «Север вверх» ⇄ «По курсу».
+            SmallFloatingActionButton(onClick = { viewModel.setNorthUp(!northUp) }) {
+                Row(Modifier.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("▲", Modifier.size(20.dp).rotate(-bearing.toFloat()), color = MaterialTheme.colorScheme.error)
+                    Text(
+                        stringResource(if (northUp) R.string.map_north_up else R.string.map_course_up),
+                        Modifier.padding(start = 6.dp),
+                    )
+                }
             }
-            if (solution?.anchor?.anchor != null) {
-                SmallFloatingActionButton(onClick = viewModel::clearAnchor) { Text(stringResource(R.string.map_anchor_clear), Modifier.padding(8.dp)) }
+            if (placingAnchor) {
+                SmallFloatingActionButton(onClick = {
+                    map?.cameraPosition?.target?.let { target ->
+                        viewModel.setAnchor(GeoPoint(target.latitude, target.longitude))
+                        Toast.makeText(context, R.string.map_anchor_set, Toast.LENGTH_SHORT).show()
+                    }
+                    placingAnchor = false
+                    follow = true
+                }) { Text(stringResource(R.string.map_anchor_confirm), Modifier.padding(8.dp)) }
+                OutlinedButton(onClick = { placingAnchor = false; follow = true }) { Text(stringResource(R.string.map_anchor_cancel)) }
+            } else {
+                if (!follow && viewMode == MapViewMode.LOCATION) {
+                    SmallFloatingActionButton(onClick = { follow = true }) { Text(stringResource(R.string.map_center), Modifier.padding(8.dp)) }
+                }
+                SmallFloatingActionButton(onClick = {
+                    // Начинаем с текущей позиции (или там, где сейчас карта); дальше вы двигаете карту под перекрестие.
+                    follow = false
+                    placingAnchor = true
+                    viewModel.setViewMode(MapViewMode.LOCATION)
+                    held?.let { h -> map?.easeCamera(CameraUpdateFactory.newLatLng(LatLng(h.point.latitude, h.point.longitude)), EASE_MILLIS) }
+                    Toast.makeText(context, R.string.map_anchor_hint, Toast.LENGTH_LONG).show()
+                }) { Text(stringResource(if (solution?.anchor?.anchor != null) R.string.map_anchor_move else R.string.map_anchor_place), Modifier.padding(8.dp)) }
+                if (solution?.anchor?.anchor != null) {
+                    SmallFloatingActionButton(onClick = viewModel::clearAnchor) { Text(stringResource(R.string.map_anchor_clear), Modifier.padding(8.dp)) }
+                }
             }
             SmallFloatingActionButton(onClick = viewModel::toggleTrack) {
                 Text(

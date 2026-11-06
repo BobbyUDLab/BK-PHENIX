@@ -298,6 +298,7 @@ class GnssDataSource(private val context: Context) : DataSource("ГНСС") {
                 timeOffsetNanos = m.timeOffsetNanos,
                 state = m.state,
                 pseudorangeRateMps = m.pseudorangeRateMetersPerSecond,
+                pseudorangeRateUncertaintyMps = m.pseudorangeRateUncertaintyMetersPerSecond,
                 agcDb = if (m.hasAutomaticGainControlLevelDb()) m.automaticGainControlLevelDb else null,
             )
         }

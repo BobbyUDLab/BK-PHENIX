@@ -73,7 +73,7 @@ public object GnssReplayDiagnosticsAnalyzer {
             val uncertainties = measurements.mapNotNull { m ->
                 m.pseudorangeRateUncertaintyMps?.takeIf { it.isFinite() && it >= 0.0 }
             }.sorted()
-            val absoluteRates = measurements.mapNotNull { m -> m.pseudorangeRateMps?.takeIf { it.isFinite() }?.let(kotlin.math::abs) }.sorted()
+            val absoluteRates = measurements.mapNotNull { m -> m.pseudorangeRateMps?.takeIf { it.isFinite() }?.let { kotlin.math.abs(it) } }.sorted()
             val dualBandDeltas = log.epochs.flatMap { epoch ->
                 epoch.measurements.asSequence().filter { it.sat.constellation == system && it.pseudorangeRateMps?.isFinite() == true }
                     .groupBy { it.sat }

@@ -11,6 +11,7 @@ import ru.bkphenix.core.model.GnssConstellation
 import ru.bkphenix.core.model.PositionObservation
 import ru.bkphenix.core.model.PositionSource
 import ru.bkphenix.core.replay.GnssLoggerParser
+import ru.bkphenix.core.replay.GnssReplayDiagnosticsAnalyzer
 import ru.bkphenix.core.replay.LoggedFix
 import java.io.File
 import java.util.zip.GZIPInputStream
@@ -29,7 +30,7 @@ private fun leapSeconds(gpsMillis: Long): Long =
     if (gpsMillis + Pseudoranges.GPS_EPOCH_UNIX_MILLIS < 1_483_228_800_000L) 17 else 18
 
 private fun usage(): Nothing {
-    System.err.println("Использование: replay <журнал GnssLogger> [--nav <файл RINEX nav, можно .gz>] [--epochs <CSV по эпохам>]")
+    System.err.println("Использование: replay <журнал GnssLogger> [--nav <файл RINEX nav, можно .gz>] [--epochs <CSV по эпохам>] [--constellations]")
     exitProcess(2)
 }
 
@@ -52,6 +53,19 @@ public fun main(args: Array<String>) {
     replay.csv = csv?.printWriter()?.also { it.println("utc,state,raim,chi2,thr,used,prs,alerts,err,clockBiasM,dFullBiasNs,r95,hpl") }
     println(replay.run(log.epochs).report())
     replay.csv?.close()
+    if ("--constellations" in args) {
+        val navData = nav ?: usage()
+        val diagnostics = GnssReplayDiagnosticsAnalyzer.analyze(log, navData)
+        println("# Исследовательская сверка созвездий и PRR (не диагноз подмены)")
+        diagnostics.byConstellation.forEach { s ->
+            println("${s.constellation}: измерений=${s.measurementCount}, эпох с PRR=${s.epochsWithPrr}, PRR+σ=${s.epochsWithPrrAndUncertainty}, " +
+                "медиана σPRR=${s.medianPrrUncertaintyMps}, медиана |PRR|=${s.medianAbsPrrMps}, межчастотных пар=${s.dualBandPrrPairs}, " +
+                "медиана ΔPRR=${s.medianDualBandPrrDeltaMps} м/с, эпох самостоятельного WLS=${s.standaloneWlsEpochs}")
+        }
+        diagnostics.pairwiseSeparations.forEach { s ->
+            println("${s.first} ↔ ${s.second}: общих эпох=${s.pairedEpochs}, медиана разницы=${s.medianHorizontalSeparationM} м, максимум=${s.maximumHorizontalSeparationM} м")
+        }
+    }
 }
 
 /** Проигрывает эпохи через [GnssIntegrityProcessor] и копит статистику. */

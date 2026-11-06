@@ -24,6 +24,7 @@ import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.model.PositionSource
 import ru.bkphenix.core.track.HeldPosition
 import ru.bkphenix.core.track.TrackPoint
+import ru.bkphenix.core.track.TrackSegments
 import ru.bkphenix.core.roads.MatchResult
 
 /** Слои приложения поверх базовой карты: трек, источники, якорь, позиция с кругом ошибки. */
@@ -40,12 +41,23 @@ internal object MapLayers {
     fun install(style: Style, oled: Boolean = false) {
         dark = oled
         listOf(TRACK, SOURCES, ANCHOR, ROAD, POSITION).forEach { style.addSource(GeoJsonSource(it)) }
+        // Трек — отрезками: сплошная линия — обычные точки, пунктир — грубые (сеть, счисление, якорь при подмене).
+        val trackColor = if (oled) PhenixPalette.hex(PhenixPalette.ORANGE) else "#E0457B"
         style.addLayer(
-            LineLayer(TRACK, TRACK).withProperties(
-                PropertyFactory.lineColor(if (oled) PhenixPalette.hex(PhenixPalette.ORANGE) else "#E0457B"),
+            LineLayer(TRACK, TRACK).withFilter(Expression.eq(Expression.get("coarse"), false)).withProperties(
+                PropertyFactory.lineColor(trackColor),
                 PropertyFactory.lineWidth(4f),
                 PropertyFactory.lineOpacity(0.85f),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+                PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+            ),
+        )
+        style.addLayer(
+            LineLayer("$TRACK-coarse", TRACK).withFilter(Expression.eq(Expression.get("coarse"), true)).withProperties(
+                PropertyFactory.lineColor(trackColor),
+                PropertyFactory.lineWidth(3f),
+                PropertyFactory.lineOpacity(0.6f),
+                PropertyFactory.lineDasharray(arrayOf(1.5f, 1.5f)),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
             ),
         )
@@ -114,8 +126,13 @@ internal object MapLayers {
             ),
         )
         style.getSourceAs<GeoJsonSource>(TRACK)?.setGeoJson(
-            if (track.size < 2) FeatureCollection.fromFeatures(emptyList())
-            else FeatureCollection.fromFeature(Feature.fromGeometry(LineString.fromLngLats(track.map { it.point.toPoint() }))),
+            FeatureCollection.fromFeatures(
+                TrackSegments.split(track).map { seg ->
+                    Feature.fromGeometry(LineString.fromLngLats(seg.points.map { it.point.toPoint() })).apply {
+                        addBooleanProperty("coarse", seg.coarse)
+                    }
+                },
+            ),
         )
         val sources = mutableListOf<Feature>()
         solution?.comparison?.let { c ->

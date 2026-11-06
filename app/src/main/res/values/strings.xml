@@ -52,6 +52,13 @@
     <string name="map_reimport">Сменить карту</string>
     <string name="map_anchor_set">Якорь поставлен</string>
     <string name="map_anchor_clear">Снять якорь</string>
+    <string name="map_anchor_place">Поставить якорь</string>
+    <string name="map_anchor_move">Переставить якорь</string>
+    <string name="map_anchor_confirm">Якорь сюда</string>
+    <string name="map_anchor_cancel">Отмена</string>
+    <string name="map_anchor_hint">Сдвиньте карту так, чтобы перекрестие стояло на вашем месте, и нажмите «Якорь сюда»</string>
+    <string name="map_north_up">Север вверх</string>
+    <string name="map_course_up">По курсу</string>
     <string name="map_center">К позиции</string>
     <string name="map_no_position">Нет позиции</string>
     <string name="map_status">R95 %1$s м · %2$s км/ч</string>

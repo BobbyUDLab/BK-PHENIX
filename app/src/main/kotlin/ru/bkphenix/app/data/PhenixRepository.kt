@@ -31,6 +31,7 @@ import ru.bkphenix.app.data.model.RawLocation
 import kotlin.math.abs
 import ru.bkphenix.app.data.model.SensorSnapshot
 import ru.bkphenix.core.inertial.DeadReckoningSource
+import ru.bkphenix.core.terrain.GrossAltitudeVeto
 import ru.bkphenix.core.inertial.InertialEstimate
 import ru.bkphenix.core.track.MotionMode
 import ru.bkphenix.app.data.model.SourceStatus
@@ -164,6 +165,7 @@ class PhenixRepository(
     private val _sensors = MutableStateFlow<Map<SensorKind, SensorSnapshot>>(emptyMap())
     /** Счисление пути по ИИБ: источник компаратора и позиция карты при пропадании ГНСС. */
     private val deadReckoning = DeadReckoningSource()
+    private val altitudeVeto = GrossAltitudeVeto()
 
     /** Режим счисления (пешком/авто); задаётся с карты. */
     var motionMode: MotionMode
@@ -327,13 +329,18 @@ class PhenixRepository(
             ?: VerticalIntegrityMonitor(model, barometer).also { vertical = model to it }
     }
 
-    /** Высота ГНСС — только свежий фикс провайдера gps (эллипсоидальная высота Location). */
+    /**
+     * Высота ГНСС — только свежий фикс провайдера gps (эллипсоидальная высота Location). Рельеф берётся
+     * под самим фиксом: проверяется согласованность фикса, а не итога — иначе после запрета GNSS по
+     * высоте (итог без GNSS) проверять стало бы нечего и запрет снимался бы сам.
+     */
     private fun checkVertical(solution: PhenixSolution, now: Long): VerticalCheck? {
         val monitor = verticalMonitor() ?: return null
         val gps = lastGps?.takeIf { abs(now - it.timeMillis) < GPS_FRESH_MILLIS }
         val trusted = solution.integrity.state == IntegrityState.OK
+        val point = gps?.let { GeoPoint(it.latitude, it.longitude) } ?: solution.point
         return monitor.update(
-            solution.point, gps?.altitude, gps?.verticalAccuracyM?.toDouble(), motionMode, trusted, now,
+            point, gps?.altitude, gps?.verticalAccuracyM?.toDouble(), motionMode, trusted, now,
         )
     }
 
@@ -356,13 +363,17 @@ class PhenixRepository(
             timeObservations = time,
             rawGnss = raw,
             navigationSubframes = subframes,
+            gnssVetoed = altitudeVeto.active,
         )
         val match = matchRoad(solved)
         _roadMatch.value = match
         val offRoadReport = offRoad.update(match)
         val check = checkVertical(solved, now)
         _verticalCheck.value = check
-        val extra = listOfNotNull(offRoadReport, check?.report).filter { it.state != IntegrityState.OK }
+        // Грубая ошибка высоты (подмена у Шереметьево: +780 м) — запрет GNSS со следующей эпохи;
+        // счисление, привязанное к подменённой GNSS, сбрасывается.
+        if (altitudeVeto.update(check?.residualM)) deadReckoning.resetIfUnconfirmed()
+        val extra = listOfNotNull(offRoadReport, check?.report, altitudeVeto.report()).filter { it.state != IntegrityState.OK }
         val solution = if (extra.isEmpty()) solved
         else solved.copy(integrity = IntegrityReport.merge(listOf(solved.integrity) + extra))
         _solution.value = solution

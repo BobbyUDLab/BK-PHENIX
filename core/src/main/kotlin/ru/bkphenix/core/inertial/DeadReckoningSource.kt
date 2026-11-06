@@ -96,6 +96,19 @@ public class DeadReckoningSource(private val navigator: InertialNavigator = Iner
         return onSolution(solution.point, solution.accuracyM, solution.integrity.state, realtimeMillis, confirmed)
     }
 
+    /**
+     * GNSS признана подменённой: счисление, привязанное к ней без независимого подтверждения,
+     * сбрасывается — иначе оно продолжало бы вести подменённую траекторию. Подтверждённое (якорем
+     * или кворумом без GNSS) остаётся. Возвращает true, если сброшено.
+     */
+    @Synchronized
+    public fun resetIfUnconfirmed(): Boolean {
+        if (anchorIndependent) return false
+        navigator.reset()
+        acceptedFixes = 0
+        return true
+    }
+
     /** Сколько решений принято с момента создания: до [MIN_SEED_FIXES] счисление не голосует. */
     private var acceptedFixes = 0
 

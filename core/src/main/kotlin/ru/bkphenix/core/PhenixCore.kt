@@ -63,11 +63,17 @@ public class PhenixCore(
         timeObservations: List<TimeObservation> = emptyList(),
         rawGnss: RawGnssEpoch? = null,
         navigationSubframes: List<NavigationSubframe> = emptyList(),
+        /**
+         * GNSS признана подменённой внешней проверкой (грубая ошибка высоты, [ru.bkphenix.core.terrain.GrossAltitudeVeto]):
+         * ни чип, ни собственное решение WLS в итог не идут. Сырые данные по-прежнему проверяются — для экрана «Спутники».
+         */
+        gnssVetoed: Boolean = false,
     ): PhenixSolution {
+        val observations = if (gnssVetoed) observations.filterNot { SourceGroup.GNSS_SIGNAL in it.origin } else observations
         gnssProcessor.addSubframes(navigationSubframes)
         val words = navigationWords + navigationSubframes.flatMap { it.words }
         val gnss = rawGnss?.let { gnssProcessor.process(it, observations, timeObservations) }
-        val wls = gnss?.ownSolution?.let {
+        val wls = gnss?.ownSolution?.takeUnless { gnssVetoed }?.let {
             PositionObservation(PositionSource.GNSS_WLS, it.point, it.horizontalSigmaM.coerceAtLeast(MIN_WLS_SIGMA_M), nowMillis)
         }
         // Кинематика и непрерывность: скачок GNSS отсекается до компаратора.

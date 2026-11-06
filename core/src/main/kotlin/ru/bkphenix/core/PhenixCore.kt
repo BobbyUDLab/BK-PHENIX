@@ -113,8 +113,12 @@ public class PhenixCore(
             .maxByOrNull { it.timestampMillis }
         val gnssAccepted = unanchored.accepted.any { SourceGroup.GNSS_SIGNAL in it.origin }
         val networkDistance = network?.let { unanchored.estimate?.distanceTo(it.point) }
+        // Сеть отстаёт на 5–20 с: в машине это сотни метров (поездка 04.11.2026 20:23 — 237 ложных
+        // переключений на устаревшую сеть при пороге без учёта возраста). Подмена у Шереметьево — 13–20 км.
         val networkGate = if (network != null && unanchored.accuracyM != null) {
-            max(NETWORK_MIN_GATE_M, NETWORK_GATE_SIGMA * sqrt(unanchored.accuracyM * unanchored.accuracyM + network.accuracyM * network.accuracyM))
+            val ageS = (nowMillis - network.timestampMillis).coerceAtLeast(0) / 1000.0
+            max(NETWORK_MIN_GATE_M, NETWORK_GATE_SIGMA * sqrt(unanchored.accuracyM * unanchored.accuracyM + network.accuracyM * network.accuracyM)) +
+                NETWORK_LAG_SPEED_MPS * ageS
         } else Double.POSITIVE_INFINITY
         if (
             integrity.state == IntegrityState.SPOOFING_SUSPECTED &&
@@ -158,6 +162,7 @@ public class PhenixCore(
         /** Нижняя граница σ собственного решения: модель ошибок псевдодальностей оптимистична. */
         const val MIN_WLS_SIGMA_M = 3.0
         const val NETWORK_GATE_SIGMA = 4.0
-        const val NETWORK_MIN_GATE_M = 200.0
+        const val NETWORK_MIN_GATE_M = 1_000.0
+        const val NETWORK_LAG_SPEED_MPS = 40.0
     }
 }

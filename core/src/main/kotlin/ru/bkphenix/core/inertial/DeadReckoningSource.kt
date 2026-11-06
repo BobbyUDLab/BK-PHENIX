@@ -1,9 +1,12 @@
 package ru.bkphenix.core.inertial
 
+import ru.bkphenix.core.PhenixSolution
+import ru.bkphenix.core.compare.ComparisonResult
 import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.integrity.IntegrityState
 import ru.bkphenix.core.model.PositionObservation
 import ru.bkphenix.core.model.PositionSource
+import ru.bkphenix.core.model.SourceGroup
 import ru.bkphenix.core.track.MotionMode
 
 /**
@@ -38,6 +41,10 @@ public class DeadReckoningSource(private val navigator: InertialNavigator = Iner
     public fun observation(realtimeMillis: Long, wallMillis: Long): PositionObservation? {
         val e = navigator.estimate(realtimeMillis) ?: return null
         if (e.sinceFixMillis == 0L) return null
+        // Один фикс — не основа для счисления: первый фикс после включения бывает кэшированным или
+        // поддельным (DOOGEE 05.11.2026: точка у Шереметьево, затем GNSS пропала, и счисление
+        // от неё 70 с отсекало верную сеть).
+        if (!anchorIndependent && acceptedFixes < MIN_SEED_FIXES) return null
         return PositionObservation(PositionSource.DEAD_RECKONING, e.point, e.sigmaM, wallMillis, gnssDerived = !anchorIndependent)
     }
 
@@ -68,12 +75,33 @@ public class DeadReckoningSource(private val navigator: InertialNavigator = Iner
     ): Boolean {
         if (point == null || state in UNTRUSTED) return false
         val accepted = navigator.onFix(point, accuracyM ?: DEFAULT_SIGMA_M, realtimeMillis)
-        if (accepted) anchorIndependent = independentlyConfirmed
+        if (accepted) {
+            anchorIndependent = independentlyConfirmed
+            acceptedFixes++
+        }
         return accepted
     }
+
+    /**
+     * Подтягивает счисление к итогу эпохи [solution]. Итог, который держится только на самом
+     * счислении (GNSS нет, остальное отсеяно), не принимается: иначе счисление «подтверждало» бы
+     * само себя и его σ не росла (DOOGEE 05.11.2026: σ 2–3 м на точке в 13 км от реальной).
+     */
+    @Synchronized
+    public fun onSolution(solution: PhenixSolution, realtimeMillis: Long): Boolean {
+        val accepted = solution.comparison.accepted
+        if (accepted.isEmpty() || accepted.all { it.source == PositionSource.DEAD_RECKONING }) return false
+        val confirmed = solution.comparison.strongConfirmationsExcluding(SourceGroup.INERTIAL) >= ComparisonResult.QUORUM ||
+            accepted.any { it.source == PositionSource.LANDMARK }
+        return onSolution(solution.point, solution.accuracyM, solution.integrity.state, realtimeMillis, confirmed)
+    }
+
+    /** Сколько решений принято с момента создания: до [MIN_SEED_FIXES] счисление не голосует. */
+    private var acceptedFixes = 0
 
     private companion object {
         val UNTRUSTED = setOf(IntegrityState.INCONSISTENT, IntegrityState.SPOOFING_SUSPECTED, IntegrityState.NO_DATA)
         const val DEFAULT_SIGMA_M = 20.0
+        const val MIN_SEED_FIXES = 3
     }
 }

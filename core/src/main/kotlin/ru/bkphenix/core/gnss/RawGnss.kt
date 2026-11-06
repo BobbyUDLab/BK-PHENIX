@@ -60,6 +60,8 @@ public data class RawGnssMeasurement(
     val pseudorangeRateMps: Double? = null,
     /** Уровень АРУ, дБ, если чип его сообщает. */
     val agcDb: Double? = null,
+    /** Неопределённость PRR, м/с; передаётся чипом Android. */
+    val pseudorangeRateUncertaintyMps: Double? = null,
 )
 
 /** Эпоха сырых измерений. */

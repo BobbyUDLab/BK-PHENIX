@@ -16,8 +16,9 @@ public data class TrackPoint(
 )
 
 /**
- * Прореживание трека. Недостоверная эпоха и физически невозможный скачок обрывают
- * непрерывность: следующее подтверждённое решение начинает новую последовательность.
+ * Прореживание трека. Эпоха из [TrackPolicy.SKIP_STATES] и физически невозможный скачок обрывают
+ * непрерывность: следующее решение начинает новую последовательность. Какие эпохи вообще писать,
+ * решает [TrackPolicy.classify]; до прореживания точки проходят [TrackSmoother].
  */
 public class TrackThinner(
     private val minDistanceM: Double = 3.0,
@@ -27,7 +28,7 @@ public class TrackThinner(
     private var last: TrackPoint? = null
 
     public fun accept(p: TrackPoint): Boolean {
-        if (p.integrity != null && p.integrity != "OK") {
+        if (p.integrity != null && TrackPolicy.SKIP_STATES.any { it.name == p.integrity }) {
             reset()
             return false
         }
@@ -61,7 +62,7 @@ public object GpxWriter {
     private val iso = DateTimeFormatter.ISO_INSTANT
 
     public fun write(name: String, points: List<TrackPoint>, creator: String = "BK-PHENIX"): String = buildString {
-        val exportable = points.filter { it.integrity == null || it.integrity == "OK" }
+        val exportable = points.filter { p -> TrackPolicy.SKIP_STATES.none { it.name == p.integrity } }
         append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
         append("<gpx version=\"1.1\" creator=\"").append(escape(creator)).append("\" ")
         append("xmlns=\"http://www.topografix.com/GPX/1/1\" ")
@@ -70,37 +71,35 @@ public object GpxWriter {
             append("  <metadata><time>").append(iso.format(Instant.ofEpochMilli(it.timeMillis))).append("</time></metadata>\n")
         }
         append("  <trk>\n    <name>").append(escape(name)).append("</name>\n")
-        var previous: TrackPoint? = null
-        var segmentOpen = false
-        fun closeSegment() {
-            if (segmentOpen) append("    </trkseg>\n")
-            segmentOpen = false
+        // Отрезки — как на карте: разрыв по времени и невозможной скорости; смена качества линию не рвёт.
+        val segments = mergeQuality(TrackSegments.split(exportable, minPoints = 1))
+        for (segment in segments) {
+            append("    <trkseg>\n")
+            for (p in segment) {
+                append("      <trkpt lat=\"").append(num(p.point.latitude, 7)).append("\" lon=\"").append(num(p.point.longitude, 7)).append("\">")
+                p.point.altitude?.let { append("<ele>").append(num(it, 1)).append("</ele>") }
+                append("<time>").append(iso.format(Instant.ofEpochMilli(p.timeMillis))).append("</time>")
+                if (p.accuracyM != null || p.integrity != null) {
+                    append("<extensions>")
+                    p.accuracyM?.let { append("<bk:accuracy>").append(num(it, 1)).append("</bk:accuracy>") }
+                    p.integrity?.let { append("<bk:integrity>").append(escape(it)).append("</bk:integrity>") }
+                    append("</extensions>")
+                }
+                append("</trkpt>\n")
+            }
+            append("    </trkseg>\n")
         }
-        for (p in exportable) {
-            val prev = previous
-            if (prev != null) {
-                val elapsedMillis = p.timeMillis - prev.timeMillis
-                val speed = if (elapsedMillis > 0) prev.point.distanceTo(p.point) / (elapsedMillis / 1000.0) else Double.POSITIVE_INFINITY
-                if (speed > TrackThinner.MAX_REASONABLE_SPEED_MPS) closeSegment()
-            }
-            if (!segmentOpen) {
-                append("    <trkseg>\n")
-                segmentOpen = true
-            }
-            append("      <trkpt lat=\"").append(num(p.point.latitude, 7)).append("\" lon=\"").append(num(p.point.longitude, 7)).append("\">")
-            p.point.altitude?.let { append("<ele>").append(num(it, 1)).append("</ele>") }
-            append("<time>").append(iso.format(Instant.ofEpochMilli(p.timeMillis))).append("</time>")
-            if (p.accuracyM != null || p.integrity != null) {
-                append("<extensions>")
-                p.accuracyM?.let { append("<bk:accuracy>").append(num(it, 1)).append("</bk:accuracy>") }
-                p.integrity?.let { append("<bk:integrity>").append(escape(it)).append("</bk:integrity>") }
-                append("</extensions>")
-            }
-            append("</trkpt>\n")
-            previous = p
-        }
-        closeSegment()
         append("  </trk>\n</gpx>\n")
+    }
+
+    /** Склейка соседних отрезков разного качества (они делят точку стыка) в один trkseg. */
+    private fun mergeQuality(segments: List<TrackSegment>): List<List<TrackPoint>> {
+        val out = mutableListOf<MutableList<TrackPoint>>()
+        for (s in segments) {
+            val last = out.lastOrNull()
+            if (last != null && last.last() == s.points.first()) last += s.points.drop(1) else out += s.points.toMutableList()
+        }
+        return out
     }
 
     private fun num(v: Double, digits: Int) = String.format(Locale.ROOT, "%.${digits}f", v)

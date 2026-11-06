@@ -15,6 +15,9 @@ import ru.bkphenix.core.PhenixSolution
 import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.track.GpxWriter
 import ru.bkphenix.core.track.TrackPoint
+import ru.bkphenix.core.track.TrackPolicy
+import ru.bkphenix.core.track.TrackQuality
+import ru.bkphenix.core.track.TrackSmoother
 import ru.bkphenix.core.track.TrackThinner
 import java.io.File
 import java.text.SimpleDateFormat
@@ -52,9 +55,18 @@ class TrackRecorder(
             val id = dao.insert(TrackEntity(name = "Трек ${nameFormat.format(Date(startedAt))}", startedAt = startedAt))
             _state.value = TrackRecordingState(id, 0)
             val thinner = TrackThinner()
+            val smoother = TrackSmoother()
             solutions.filterNotNull().collect { s ->
+                // Что писать — TrackPolicy; переключения источников сглаживает фильтр, а не рисуют зигзаг.
+                if (TrackPolicy.classify(s) == TrackQuality.SKIP) {
+                    smoother.reset()
+                    thinner.reset()
+                    return@collect
+                }
                 val point = s.point ?: return@collect
-                val tp = TrackPoint(clock(), point, s.accuracyM, s.integrity.state.name)
+                val raw = TrackPoint(clock(), point, s.accuracyM, s.integrity.state.name)
+                val tp = smoother.smooth(raw) ?: return@collect
+                if (smoother.restarted) thinner.reset()
                 if (thinner.accept(tp)) {
                     dao.insertPoint(tp.toEntity(id))
                     _state.value = TrackRecordingState(id, _state.value.points + 1)

@@ -65,7 +65,7 @@ object PhenixLogRecords {
         "cells" to cells.map {
             linkedMapOf(
                 "tech" to it.technology.name, "serving" to it.isServing, "mcc" to it.mcc, "mnc" to it.mnc,
-                "area" to it.areaCode, "cid" to it.cellId, "pci" to it.pci, "dbm" to it.signalDbm, "ta" to it.timingAdvance,
+                "area" to it.areaCode, "cid" to it.cellId, "pci" to it.pci, "dbm" to it.signalDbm, "ta" to it.timingAdvance, "age" to it.ageMillis,
             )
         },
         "sensors" to sensors.associate { it.kind.name to mapOf("values" to it.values, "t" to it.timeMillis) },

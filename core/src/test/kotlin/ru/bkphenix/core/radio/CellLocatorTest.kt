@@ -84,4 +84,34 @@ class CellLocatorTest {
         assertTrue(s in 60.0..70.0)
         assertNull(CellLocator.taRange(CellTechnology.NR, 3))
     }
+
+    @Test
+    fun `вышка второй SIM в 38 км не утягивает позицию`() {
+        // 19.05.2026: сота основной SIM-карты рядом, сота второй SIM-карты из кэша второй SIM — в 38 км.
+        val far = GeoPoint(TRUE_POINT.latitude + 0.34, TRUE_POINT.longitude)
+        val db = dbOf(listOf(tower(1, TRUE_POINT, 1_000.0), tower(2, far, 3_560.0)))
+        val obs = CellLocator(db).locate(listOf(cell(1, -75, serving = true), cell(2, -85, serving = true)), T0)!!
+        assertTrue(obs.point.distanceTo(TRUE_POINT) < 1_000, "ошибка ${obs.point.distanceTo(TRUE_POINT)}")
+    }
+
+    @Test
+    fun `больше согласованных вышек побеждает одну точную`() {
+        val far = GeoPoint(TRUE_POINT.latitude + 0.3, TRUE_POINT.longitude)
+        val near2 = GeoPoint(TRUE_POINT.latitude + 0.005, TRUE_POINT.longitude)
+        val db = dbOf(listOf(tower(1, far, 300.0), tower(2, TRUE_POINT, 2_000.0), tower(3, near2, 2_000.0)))
+        val obs = CellLocator(db).locate(listOf(cell(1, -80), cell(2, -80), cell(3, -80)), T0)!!
+        assertTrue(obs.point.distanceTo(TRUE_POINT) < 2_000, "ошибка ${obs.point.distanceTo(TRUE_POINT)}")
+    }
+
+    @Test
+    fun `замёрзшая обслуживающая сота отбрасывается, живая — нет`() {
+        val db = dbOf(listOf(tower(1, TRUE_POINT)))
+        val loc = CellLocator(db)
+        for (s in 0..12) assertTrue(loc.locate(listOf(cell(1, -80 - s % 3, serving = true)), T0 + s * 5_000L) != null)
+        val frozen = CellLocator(db)
+        assertTrue(frozen.locate(listOf(cell(1, -85, serving = true)), T0) != null)
+        assertTrue(frozen.locate(listOf(cell(1, -85, serving = true)), T0 + 55_000) != null)
+        assertNull(frozen.locate(listOf(cell(1, -85, serving = true)), T0 + 65_000))
+        assertNull(loc.locate(listOf(cell(1, -80, serving = true).copy(ageMillis = 120_000)), T0 + 70_000))
+    }
 }

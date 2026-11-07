@@ -22,6 +22,8 @@ public data class CellMeasurement(
     val rsrpDbm: Int?,
     val timingAdvance: Int?,
     val isServing: Boolean,
+    /** Возраст измерения по часам модема, мс (CellInfo.timestamp); `null` — неизвестен. */
+    val ageMillis: Long? = null,
 )
 
 /** Запись офлайн-базы вышек (OpenCellID / дамп Mozilla Location Service). */

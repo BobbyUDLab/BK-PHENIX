@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import ru.bkphenix.app.data.PhenixRepository
+import ru.bkphenix.app.data.log.RawLogState
 import ru.bkphenix.app.data.map.MapFileState
 import ru.bkphenix.app.data.map.MapFileStore
 import ru.bkphenix.app.data.roads.RoadGraphState
@@ -22,6 +23,7 @@ import ru.bkphenix.app.data.terrain.TerrainState
 import ru.bkphenix.app.data.terrain.TerrainStore
 import ru.bkphenix.core.terrain.VerticalCheck
 import ru.bkphenix.core.roads.MatchResult
+import ru.bkphenix.app.data.track.RecordingController
 import ru.bkphenix.app.data.track.TrackRecorder
 import ru.bkphenix.app.data.track.TrackRecordingState
 import ru.bkphenix.app.data.track.toTrackPoint
@@ -40,6 +42,7 @@ enum class MapViewMode(val displayName: String) { LOCATION("Местополож
 class MapViewModel(
     private val repository: PhenixRepository,
     private val recorder: TrackRecorder,
+    private val control: RecordingController,
     private val mapFiles: MapFileStore,
     private val roadGraphs: RoadGraphStore,
     private val terrainFiles: TerrainStore,
@@ -63,6 +66,11 @@ class MapViewModel(
     fun setNorthUp(value: Boolean) {
         _northUp.value = value
     }
+
+    /** Курс верха телефона по компасу для режима «По курсу», 4 раза в секунду. */
+    private val _heading = MutableStateFlow<Double?>(null)
+    val heading: StateFlow<Double?> = _heading.asStateFlow()
+    val logState: StateFlow<RawLogState> = repository.logState
 
     private val _viewMode = MutableStateFlow(MapViewMode.LOCATION)
     val viewMode: StateFlow<MapViewMode> = _viewMode.asStateFlow()
@@ -95,6 +103,12 @@ class MapViewModel(
                 _held.value = current()
             }
         }
+        viewModelScope.launch {
+            while (true) {
+                delay(250)
+                _heading.value = repository.compassHeadingDeg()
+            }
+        }
     }
 
     private fun current() = PositionFusion.choose(motion.position(clock()), repository.deadReckoningEstimate())
@@ -113,7 +127,8 @@ class MapViewModel(
 
     fun clearAnchor() = repository.clearAnchor()
 
-    fun toggleTrack() = if (recorder.state.value.recording) recorder.stop() else recorder.start()
+    /** Трек и полный журнал — одной кнопкой. */
+    fun toggleTrack() = control.toggle()
 
     fun importTerrain(uri: Uri) {
         viewModelScope.launch { terrainFiles.import(uri) }

@@ -79,6 +79,23 @@ import ru.bkphenix.app.data.cells.CellDatabaseInfo
 import ru.bkphenix.core.radio.EmptyCellTowerDatabase
 import ru.bkphenix.core.radio.LearnedCellDatabase
 
+/** Внутренности эпохи для «Диагностики» и журнала: запреты, датчики, счисление, вышки. */
+data class EpochDiagnostics(
+    val timeMillis: Long,
+    val motionMode: MotionMode,
+    val altitudeVeto: Boolean,
+    val motionVeto: Boolean,
+    val motionReasons: List<String>,
+    val motion: ru.bkphenix.core.inertial.MotionSummary?,
+    val gnssSpeedMps: Double?,
+    val deadReckoning: ru.bkphenix.core.inertial.InertialEstimate?,
+    val deadReckoningIndependent: Boolean,
+    val compassHeadingDeg: Double?,
+    val observations: List<ru.bkphenix.core.model.PositionObservation>,
+    val cellFix: ru.bkphenix.core.model.PositionObservation?,
+    val learnedCells: Int,
+)
+
 /** Статистика проверки чётности GPS LNAV. */
 data class NavigationStats(val words: Long = 0, val parityFailures: Long = 0)
 
@@ -142,6 +159,9 @@ class PhenixRepository(
     private var vertical: Pair<TerrainModel, VerticalIntegrityMonitor>? = null
     private var lastGps: RawLocation? = null
     private val _verticalCheck = MutableStateFlow<VerticalCheck?>(null)
+    private val _diagnostics = MutableStateFlow<EpochDiagnostics?>(null)
+    val diagnostics: StateFlow<EpochDiagnostics?> = _diagnostics.asStateFlow()
+    @Volatile private var lastCellFix: ru.bkphenix.core.model.PositionObservation? = null
     /** Итог вертикальной проверки последней эпохи: высоты ГНСС, рельефа, барометра и расхождение. */
     val verticalCheck: StateFlow<VerticalCheck?> = _verticalCheck.asStateFlow()
     /** Итог привязки последней эпохи: исходная точка, точка на дороге, расстояние до дороги. */
@@ -189,6 +209,9 @@ class PhenixRepository(
 
     /** Текущая оценка счисления пути или null. */
     fun deadReckoningEstimate(): InertialEstimate? = deadReckoning.estimate(realtime())
+
+    /** Курс верха телефона по компасу (истинный), градусы; null — магнитометра нет. */
+    fun compassHeadingDeg(): Double? = deadReckoning.compassHeadingDeg()
 
     val sensorReadings: StateFlow<Map<SensorKind, SensorSnapshot>> = _sensors.asStateFlow()
     private val _networkTime = MutableStateFlow<NetworkTimeSample?>(null)
@@ -272,7 +295,7 @@ class PhenixRepository(
             }
             collectSafely(cells.cells()) { list ->
                 _cells.value = list
-                cellLocator.locate(list.map(CellMapping::toMeasurement), clock())?.let(aggregator::put)
+                cellLocator.locate(list.map(CellMapping::toMeasurement), clock()).also { lastCellFix = it }?.let(aggregator::put)
             }
             collectSafely(wifi.scans()) { _wifi.value = it }
             collectSafely(ble.beacons()) { _ble.value = it }
@@ -404,6 +427,22 @@ class PhenixRepository(
         deadReckoning.onSolution(solution, rt)
         solution.point?.let { updateDeclination(it, now) }
         learnCells(solution, now)
+        val diag = EpochDiagnostics(
+            timeMillis = now,
+            motionMode = motionMode,
+            altitudeVeto = altitudeVeto.active,
+            motionVeto = motionVeto,
+            motionReasons = motionCheck.report.reasons,
+            motion = motion,
+            gnssSpeedMps = motionCheck.gnssSpeedMps,
+            deadReckoning = deadReckoning.estimate(rt),
+            deadReckoningIndependent = deadReckoning.isAnchorIndependent,
+            compassHeadingDeg = deadReckoning.compassHeadingDeg(),
+            observations = fresh,
+            cellFix = lastCellFix,
+            learnedCells = learnedCells.matureCount,
+        )
+        _diagnostics.value = diag
         if (logRecorder.isRecording) {
             logRecorder.json(
                 "epoch",
@@ -419,6 +458,7 @@ class PhenixRepository(
                     observations = fresh,
                     motion = motion,
                     gnssSpeedMps = motionCheck.gnssSpeedMps,
+                    context = PhenixLogRecords.context(diag, check, match, _wifi.value, _ble.value, lastGps),
                 ),
             )
         }

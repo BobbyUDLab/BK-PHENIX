@@ -99,6 +99,7 @@ public object GnssLoggerParser {
             towKnown = MeasurementState.isTimeKnown(constellation, state),
             pseudorangeRateMps = f.double(h, "PseudorangeRateMetersPerSecond"),
             agcDb = f.double(h, "AgcDb"),
+            pseudorangeRateUncertaintyMps = f.double(h, "PseudorangeRateUncertaintyMetersPerSecond"),
         )
     }
 

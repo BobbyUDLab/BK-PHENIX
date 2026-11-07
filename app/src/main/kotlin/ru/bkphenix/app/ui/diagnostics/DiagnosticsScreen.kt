@@ -4,6 +4,8 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,6 +23,12 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ru.bkphenix.app.BuildConfig
+import ru.bkphenix.app.data.EpochDiagnostics
+import ru.bkphenix.app.data.NavigationStats
+import ru.bkphenix.app.data.model.MeasurementSummary
+import ru.bkphenix.core.PhenixSolution
+import ru.bkphenix.core.roads.MatchResult
+import ru.bkphenix.core.terrain.VerticalCheck
 import ru.bkphenix.app.data.model.SensorKind
 import ru.bkphenix.app.data.source.SensorDataSource
 import ru.bkphenix.app.ui.components.EmptyHint
@@ -33,7 +41,7 @@ import ru.bkphenix.app.ui.theme.ThemeCard
 import java.io.File
 import java.util.Locale
 
-private const val MAX_ROWS = 15
+private const val MAX_ROWS = 30
 
 @Composable
 fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
@@ -42,6 +50,20 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
     val rinex by viewModel.rinexInfo.collectAsStateWithLifecycle()
     val cellDb by viewModel.cellDatabase.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val solution by viewModel.solution.collectAsStateWithLifecycle()
+    val epoch by viewModel.epoch.collectAsStateWithLifecycle()
+    val vertical by viewModel.vertical.collectAsStateWithLifecycle()
+    val road by viewModel.road.collectAsStateWithLifecycle()
+    val measurements by viewModel.measurements.collectAsStateWithLifecycle()
+    val navigation by viewModel.navigation.collectAsStateWithLifecycle()
+    val learned by viewModel.learnedCells.collectAsStateWithLifecycle()
+    val learnedMessage by viewModel.learnedMessage.collectAsStateWithLifecycle()
+    val exportLearned = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        uri?.let { u -> viewModel.exportLearned { context.contentResolver.openOutputStream(u) } }
+    }
+    val importLearned = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let { u -> viewModel.importLearned { context.contentResolver.openInputStream(u) } }
+    }
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -71,6 +93,11 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
                 }
             }
         }
+        item { CoreDecisionCard(solution) }
+        item { GnssIntegrityCard(solution, measurements, navigation) }
+        item { MotionCard(epoch) }
+        item { ObservationsCard(solution, epoch) }
+        item { HeightRoadCard(vertical, road) }
         item {
             SectionCard("Запасные эфемериды (RINEX)") {
                 val r = rinex
@@ -93,6 +120,21 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
                     InfoRow("Регион", c.region)
                     InfoRow("Данные", c.source)
                 }
+                // Своя база: учится на надёжных эпохах, раньше офлайн-базы при поиске.
+                InfoRow("Своя база, сот", learned.toString())
+                val fix = epoch?.cellFix
+                InfoRow(
+                    "Позиция по вышкам",
+                    fix?.let { f ->
+                        "σ ${f.accuracyM.fmt(0)} м · ${ageS(f.timestampMillis, epoch!!.timeMillis)}" +
+                            (solution?.point?.let { " · до итога ${it.distanceTo(f.point).fmt(0)} м" } ?: "")
+                    } ?: "нет (соты не найдены в базах)",
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { exportLearned.launch("bk-phenix-cells.bklc") }) { Text("Экспорт") }
+                    OutlinedButton(onClick = { importLearned.launch(arrayOf("*/*")) }) { Text("Импорт") }
+                }
+                learnedMessage?.let { Text(it) }
             }
         }
         item {
@@ -119,7 +161,10 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
                         listOfNotNull(
                             c.signalDbm?.let { "$it дБм" },
                             c.timingAdvance?.let { "TA $it" },
+                            c.mnc?.let { "MNC $it" },
+                            c.areaCode?.let { "TAC/LAC $it" },
                             c.cellId?.let { "CI $it" },
+                            c.ageMillis?.let { "возраст ${(it / 1000)} с" },
                         ).joinToString(" · "),
                     )
                 }
@@ -194,3 +239,116 @@ private fun shareLogs(context: Context, files: List<File>) {
 private fun formatUtc(millis: Long): String =
     java.time.format.DateTimeFormatter.ofPattern("dd.MM HH:mm 'UTC'", Locale.ROOT)
         .format(java.time.Instant.ofEpochMilli(millis).atOffset(java.time.ZoneOffset.UTC))
+
+
+private fun ageS(t: Long, now: Long): String = "${((now - t) / 1000).coerceAtLeast(0)} с назад"
+
+private fun Double?.m(): String = this?.let { "${it.fmt(0)} м" } ?: "—"
+
+/** Решение ядра целиком: состояние и все причины, итог, принятые и отброшенные, независимые голоса, якорь. */
+@Composable
+private fun CoreDecisionCard(s: PhenixSolution?) {
+    SectionCard("Решение ядра") {
+        if (s == null) { EmptyHint("Нет решения"); return@SectionCard }
+        InfoRow("Целостность", "${s.integrity.state.name}\n${s.integrity.state.description}")
+        s.integrity.reasons.forEach { EmptyHint("• $it") }
+        InfoRow("Итог", s.point?.let { "${it.latitude.fmt(6)}, ${it.longitude.fmt(6)}" + (it.altitude?.let { h -> " · h ${h.fmt(0)} м" } ?: "") })
+        InfoRow("σ итога", s.accuracyM.m())
+        val c = s.comparison
+        InfoRow("Оценка компаратора", c.estimate?.let { "${it.latitude.fmt(6)}, ${it.longitude.fmt(6)} · σ ${c.accuracyM.m()}" })
+        InfoRow("Независимых голосов", "${c.independentConfirmations}: " + c.votes.joinToString("; ") { v -> v.groups.joinToString("+") { it.displayName } })
+        c.accepted.forEach { o ->
+            InfoRow("✓ ${o.source.displayName}", "σ ${o.accuracyM.fmt(0)} м" + (s.point?.let { " · Δ ${it.distanceTo(o.point).fmt(0)} м" } ?: "") + if (o.gnssDerived) " · от ГНСС" else "")
+        }
+        c.rejected.forEach { o ->
+            InfoRow("✗ ${o.source.displayName}", "σ ${o.accuracyM.fmt(0)} м" + (s.point?.let { " · Δ ${it.distanceTo(o.point).fmt(0)} м" } ?: "") + if (o.gnssDerived) " · от ГНСС" else "")
+        }
+        val a = s.anchor
+        InfoRow("Якорь", a.state.name + (a.anchor?.let { if (it.isAuto) " · авто (${it.basis ?: "—"})" else " · ручной" } ?: ""))
+        a.anchor?.let { InfoRow("Точка якоря", "${it.point.latitude.fmt(6)}, ${it.point.longitude.fmt(6)} · σ ${it.accuracyM.fmt(0)} м") }
+        InfoRow("Отклонение / допуск", "${a.deviationM.m()} / ${a.allowedDeviationM.m()}")
+        InfoRow("Свежесть", listOfNotNull(a.freshness?.label, a.ageSeconds?.let { "${(it / 60).toInt()} мин" }, a.traveledM?.let { "путь ${it.fmt(0)} м" }, a.propagatedSigmaM?.let { "σ ${it.fmt(0)} м" }).joinToString(" · ").ifEmpty { null })
+        a.message?.let { EmptyHint(it) }
+    }
+}
+
+/** ГНСС: RAIM (статистика, порог, HPL, исключённые), собственное решение против итога, эфемериды, все детекторы подмены. */
+@Composable
+private fun GnssIntegrityCard(s: PhenixSolution?, m: MeasurementSummary?, nav: NavigationStats) {
+    SectionCard("ГНСС: RAIM и детекторы подмены") {
+        InfoRow("Сырые измерения", m?.let { "${it.count} (фаза ${it.withCarrierPhase}) · ${it.bands.joinToString { b -> b.name }}" } ?: "нет")
+        InfoRow("АРУ", m?.agcDb?.let { "${it.fmt(1)} дБ" })
+        InfoRow("Навигационные слова", "${nav.words} · ошибок чётности ${nav.parityFailures}")
+        val g = s?.gnss
+        if (g == null) { EmptyHint("Нет контроля по сырым измерениям в этой эпохе"); return@SectionCard }
+        InfoRow("Эфемерид", "${g.ephemerisCount} (RINEX ${g.externalEphemerisCount}) · " + g.ephemerisBySystem.entries.joinToString { "${it.key.displayName} ${it.value}" })
+        InfoRow("Псевдодальностей", g.pseudorangeCount.toString())
+        val r = g.raim
+        InfoRow("RAIM", r?.let { "${it.status.name} · χ² ${it.testStatistic?.fmt(1) ?: "—"} / ${it.threshold?.fmt(1) ?: "—"}" })
+        InfoRow("HPL", r?.horizontalProtectionLevelM.m())
+        r?.excluded?.forEach { InfoRow("Исключён ${it.sat.label}", "невязка ${it.residualM.fmt(0)} м") }
+        g.ownSolution?.let { w ->
+            InfoRow("Своё решение WLS", "${w.point.latitude.fmt(6)}, ${w.point.longitude.fmt(6)} · спутников ${w.used.size}" +
+                (s?.point?.let { " · до итога ${it.distanceTo(w.point).fmt(0)} м" } ?: ""))
+            if (w.interSystemBiasesM.isNotEmpty()) InfoRow("Межсистемные смещения", w.interSystemBiasesM.entries.joinToString { "${it.key.displayName} ${it.value.fmt(0)} м" })
+        }
+        g.detectors.forEach { d ->
+            InfoRow(d.kind.name, "${d.verdict.name}\n${d.detail}")
+        }
+    }
+}
+
+/** Режим, запреты ГНСС (высота, движение), датчики движения, компас и счисление пути. */
+@Composable
+private fun MotionCard(e: EpochDiagnostics?) {
+    SectionCard("Движение, запреты ГНСС, счисление") {
+        if (e == null) { EmptyHint("Нет эпох"); return@SectionCard }
+        InfoRow("Режим", e.motionMode.displayName)
+        InfoRow("Запрет ГНСС по высоте", e.altitudeVeto.yesNo())
+        InfoRow("Запрет ГНСС по движению", e.motionVeto.yesNo())
+        e.motionReasons.forEach { EmptyHint("• $it") }
+        InfoRow("Скорость ГНСС за окно", e.gnssSpeedMps?.let { "${(it * 3.6).fmt(1)} км/ч" })
+        e.motion?.let { m ->
+            InfoRow("Шаги за 10 с", "${m.steps} · ${m.cadenceHz.fmt(2)} Гц · ритм ${m.stepIntervalCv?.fmt(2) ?: "—"}" + if (m.walking) " · ходьба" else "")
+            InfoRow("Покой", "${m.stationaryS.fmt(0)} с")
+            InfoRow("Поворот гироскопа", m.yawChangeDeg?.let { "${it.fmt(0)}°" })
+        }
+        InfoRow("Компас (истинный курс)", e.compassHeadingDeg?.let { "${it.fmt(0)}°" } ?: "нет магнитометра")
+        val d = e.deadReckoning
+        InfoRow("Счисление", d?.let {
+            "σ ${it.sigmaM.fmt(0)} м · ${(it.speedMps * 3.6).fmt(1)} км/ч · курс ${it.bearingDeg?.fmt(0) ?: "—"}° · " +
+                "без фикса ${it.sinceFixMillis / 1000} с" + (if (it.stationary) " · покой" else "") +
+                if (e.deadReckoningIndependent) " · привязка независима" else " · привязка от ГНСС"
+        } ?: "не инициализировано")
+    }
+}
+
+/** Свежие наблюдения всех источников перед сравнением: σ, возраст и расстояние до итога. */
+@Composable
+private fun ObservationsCard(s: PhenixSolution?, e: EpochDiagnostics?) {
+    SectionCard("Наблюдения источников (${e?.observations?.size ?: 0})") {
+        val obs = e?.observations.orEmpty()
+        if (obs.isEmpty()) EmptyHint("Нет свежих наблюдений")
+        obs.forEach { o ->
+            InfoRow(
+                o.source.displayName,
+                "σ ${o.accuracyM.fmt(0)} м · ${ageS(o.timestampMillis, e!!.timeMillis)}" +
+                    (s?.point?.let { " · Δ ${it.distanceTo(o.point).fmt(0)} м" } ?: "") +
+                    "\n${o.point.latitude.fmt(5)}, ${o.point.longitude.fmt(5)}",
+            )
+        }
+    }
+}
+
+@Composable
+private fun HeightRoadCard(v: VerticalCheck?, r: MatchResult?) {
+    SectionCard("Высота и дороги") {
+        InfoRow("ГНСС над геоидом", v?.gnssOrthometricM.m())
+        InfoRow("Барометр", v?.barometric?.let { "${it.heightM.fmt(0)} м ± ${it.sigmaM.fmt(0)} (${it.source.displayName})" })
+        InfoRow("Рельеф (DSM)", v?.terrainM.m())
+        InfoRow("Геоид N", v?.geoidM.m())
+        InfoRow("Опора", v?.referenceM?.let { "${it.fmt(0)} м ± ${v?.referenceSigmaM?.fmt(0) ?: "—"}" })
+        InfoRow("Расхождение / порог", "${v?.residualM.m()} / ${v?.thresholdM.m()}")
+        InfoRow("До дороги", r?.let { (it.distanceToRoadM?.let { d -> "${d.fmt(0)} м" } ?: "дальше поиска") + " (порог ${it.offRoadThresholdM.fmt(0)} м)" + if (it.offRoad) " · ВНЕ ДОРОГ" else "" })
+    }
+}

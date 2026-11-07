@@ -116,6 +116,15 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
                     clearStreak()
                     unconfirmed = independent.isEmpty()
                 }
+            } else if (o == null && contradicted(gnss, observations)) {
+                // Холодный старт (поездки 04–05.11.2026, Mate 70 и DOOGEE): первый фикс после включения
+                // геолокации бывает поддельным или кэшированным в 13–20 км (Шереметьево). Фильтр не стартует
+                // на точке, которую опровергают свежие другие источники, иначе она становится «прошлым»,
+                // от которого отсекается всё честное.
+                dropped = gnssGroup
+                val d = observations.filter { isOtherWitness(it, gnss) }.minOf { gnss.point.distanceTo(it.point) }
+                raise(nowMillis, "GNSS при старте в ${d.toInt()} м от других источников")
+                rejectStreak = 0
             } else if (o == null || gapReset) {
                 init(gnss, nowMillis)
             } else {
@@ -210,17 +219,25 @@ public class ContinuityMonitor(private val config: ContinuityConfig = Continuity
         val reach = config.maxSpeedMps * gapS + 3 * (gnss.accuracyM + sqrt(p[0][0]))
         val jump = gnss.point.distanceTo(last)
         if (jump > reach) return "Невозможный скачок GNSS после перерыва ${gapS.toInt()} с: ${jump.toInt()} м (достижимо ${reach.toInt()} м)"
-        val others = observations.filter { isOtherWitness(it, gnss) }
-        if (others.isNotEmpty() && others.none { closeTo(gnss, it) }) {
-            val d = others.minOf { gnss.point.distanceTo(it.point) }
+        if (contradicted(gnss, observations)) {
+            val d = observations.filter { isOtherWitness(it, gnss) }.minOf { gnss.point.distanceTo(it.point) }
             return "GNSS после перерыва в ${d.toInt()} м от других источников"
         }
         return null
     }
 
-    /** Хоть один другой источник (включая сеть) далеко — восстанавливаться на GNSS нельзя. */
-    private fun contradicted(gnss: PositionObservation, observations: List<PositionObservation>) =
-        observations.any { isOtherWitness(it, gnss) && !closeTo(gnss, it) }
+    /**
+     * Другие источники опровергают GNSS. Независимый от GNSS свидетель (соты, Wi-Fi, якорь, счисление
+     * от подтверждённой привязки) опровергает в одиночку. Зависимые (сеть платформы, счисление от
+     * неподтверждённого фикса) — только если ни один из них GNSS не поддерживает: DOOGEE 05.11.2026,
+     * счисление от кэшированной точки у Шереметьево 70 с отсекало GPS и сеть, которые совпадали.
+     */
+    private fun contradicted(gnss: PositionObservation, observations: List<PositionObservation>): Boolean {
+        val witnesses = observations.filter { isOtherWitness(it, gnss) }
+        if (witnesses.any { it.isGnssIndependent && !closeTo(gnss, it) }) return true
+        val dependent = witnesses.filterNot { it.isGnssIndependent }
+        return dependent.isNotEmpty() && dependent.none { closeTo(gnss, it) }
+    }
 
     /** Свидетель — не-GNSS источник или сеть не старше 2 мин; допуск растёт на макс. скорость × возраст свидетеля. */
     private fun isOtherWitness(o: PositionObservation, gnss: PositionObservation) =

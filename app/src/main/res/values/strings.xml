@@ -52,6 +52,13 @@
     <string name="map_reimport">Сменить карту</string>
     <string name="map_anchor_set">Якорь поставлен</string>
     <string name="map_anchor_clear">Снять якорь</string>
+    <string name="map_anchor_place">Поставить якорь</string>
+    <string name="map_anchor_move">Переставить якорь</string>
+    <string name="map_anchor_confirm">Якорь сюда</string>
+    <string name="map_anchor_cancel">Отмена</string>
+    <string name="map_anchor_hint">Сдвиньте карту так, чтобы перекрестие стояло на вашем месте, и нажмите «Якорь сюда»</string>
+    <string name="map_north_up">Север вверх</string>
+    <string name="map_course_up">По курсу</string>
     <string name="map_center">К позиции</string>
     <string name="map_no_position">Нет позиции</string>
     <string name="map_status">R95 %1$s м · %2$s км/ч</string>
@@ -84,4 +91,23 @@
     <string name="map_roads_off">Вне дорог: %1$s м от дороги — возможна подмена ГНСС</string>
     <string name="map_roads_far">Вне дорог: дальше %1$s м от дороги — возможна подмена ГНСС</string>
     <string name="map_track_stop">Стоп трека (%1$d)</string>
+    <string name="section_decision">Как принято решение</string>
+    <string name="label_accepted">Приняты</string>
+    <string name="label_rejected">Отброшены</string>
+    <string name="tag_confirmations">Подтверждений: %1$d</string>
+    <string name="tag_sources">Источников %1$d из %2$d</string>
+    <string name="tag_anchor">Якорь</string>
+    <string name="tag_anchor_auto">Автоякорь</string>
+    <string name="coords_copied">Координаты скопированы</string>
+    <string name="coords_tap_to_copy">Нажмите на карточку, чтобы скопировать координаты</string>
+    <string name="map_layers">Слои: рельеф, дороги, карта</string>
+    <string name="map_layer_terrain">Рельеф и геоид</string>
+    <string name="map_layer_roads">Дорожный граф</string>
+    <string name="map_layer_map">Файл карты</string>
+    <string name="map_layer_ready">Загружен · нажмите, чтобы заменить</string>
+    <string name="map_layer_missing">Не загружен · нажмите, чтобы выбрать файл</string>
+    <string name="map_course_short">курс</string>
+    <string name="map_chip_dr">счисление</string>
+    <string name="map_chip_held">удержание</string>
+    <string name="map_recording">%1$d · %2$d МБ</string>
 </resources>

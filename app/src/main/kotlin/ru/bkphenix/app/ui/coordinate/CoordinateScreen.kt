@@ -1,7 +1,30 @@
 package ru.bkphenix.app.ui.coordinate
 
 import ru.bkphenix.app.ui.theme.LocalStatusColors
+import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Card
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import ru.bkphenix.core.PhenixSolution
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -69,13 +92,20 @@ fun CoordinateScreen(viewModel: CoordinateViewModel, locationGranted: Boolean, o
                 }
             }
         }
-        SectionCard(stringResource(R.string.section_position)) {
-            val trust = PointTrust.of(solution)
-            // Точка без кворума не должна выглядеть надёжной: координаты приглушены, рядом — уровень доверия и причина.
-            val coordColor = if (trust.level == PointTrustLevel.RELIABLE) Color.Unspecified else Muted
-            InfoRow(stringResource(R.string.label_trust), "${trust.level.displayName}\n${trust.reason}", trust.level.color())
-            InfoRow(stringResource(R.string.label_latitude), solution?.point?.latitude?.fmt(6), coordColor)
-            InfoRow(stringResource(R.string.label_longitude), solution?.point?.longitude?.fmt(6), coordColor)
+        PositionHero(solution, state.running)
+        SectionCard(stringResource(R.string.section_decision)) {
+            // Почему итог такой: состояние целостности, причины, кто подтвердил и кто отброшен.
+            val integrity = solution?.integrity
+            InfoRow(
+                stringResource(R.string.label_state),
+                integrity?.state?.description,
+                integrity?.state?.color() ?: Color.Unspecified,
+            )
+            integrity?.reasons?.forEach { EmptyHint("• $it") }
+            solution?.comparison?.let { c ->
+                if (c.accepted.isNotEmpty()) InfoRow(stringResource(R.string.label_accepted), c.accepted.joinToString { it.source.displayName }, Ok)
+                if (c.rejected.isNotEmpty()) InfoRow(stringResource(R.string.label_rejected), c.rejected.joinToString { it.source.displayName }, Bad)
+            }
             InfoRow(
                 stringResource(R.string.label_accuracy),
                 solution?.accuracyM?.let { stringResource(R.string.accuracy_r95, ErrorCircle.radius(it).fmt(1), it.fmt(1)) },
@@ -84,16 +114,9 @@ fun CoordinateScreen(viewModel: CoordinateViewModel, locationGranted: Boolean, o
                 stringResource(R.string.label_hpl),
                 solution?.gnss?.raim?.horizontalProtectionLevelM?.let { stringResource(R.string.accuracy_meters, it.fmt(0)) },
             )
-            if (solution == null) EmptyHint(stringResource(if (state.running) R.string.waiting_data else R.string.not_running))
-        }
-        SectionCard(stringResource(R.string.label_integrity)) {
-            val integrity = solution?.integrity
-            InfoRow(
-                stringResource(R.string.label_state),
-                integrity?.state?.description,
-                integrity?.state?.color() ?: Color.Unspecified,
-            )
-            integrity?.reasons?.forEach { EmptyHint("• $it") }
+            solution?.gnss?.detectors?.filter { it.verdict == ru.bkphenix.core.gnss.DetectorVerdict.ALERT }?.forEach { d ->
+                EmptyHint("• ${d.kind.name}: ${d.detail}")
+            }
         }
         SectionCard(stringResource(R.string.label_anchor)) {
             val anchor = solution?.anchor
@@ -161,6 +184,80 @@ fun CoordinateScreen(viewModel: CoordinateViewModel, locationGranted: Boolean, o
                 }
             },
         )
+    }
+}
+
+/**
+ * Главная карточка: цвет полосы и значок — доверие к точке, крупные координаты (приглушены без кворума),
+ * точность, причина и короткие метки: подтверждения, якорь, HPL. Нажатие — копировать координаты.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PositionHero(solution: PhenixSolution?, running: Boolean) {
+    val trust = PointTrust.of(solution)
+    val color = trust.level.color().takeIf { it != Color.Unspecified } ?: MaterialTheme.colorScheme.onSurfaceVariant
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    val p = solution?.point
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = {
+            if (p != null) {
+                clipboard.setText(AnnotatedString("${p.latitude.fmt(6)}, ${p.longitude.fmt(6)}"))
+                Toast.makeText(context, R.string.coords_copied, Toast.LENGTH_SHORT).show()
+            }
+        },
+    ) {
+        Row(Modifier.height(IntrinsicSize.Min)) {
+            Box(Modifier.width(6.dp).fillMaxHeight().background(color))
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(10.dp).clip(CircleShape).background(color))
+                    Text("  " + trust.level.displayName, style = MaterialTheme.typography.titleMedium, color = color, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.weight(1f))
+                    solution?.accuracyM?.let {
+                        Text("±${ErrorCircle.radius(it).fmt(0)} м", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                if (p == null) {
+                    Text(
+                        stringResource(if (running) R.string.waiting_data else R.string.not_running),
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    val coordColor = if (trust.level == PointTrustLevel.RELIABLE) MaterialTheme.colorScheme.onSurface else Muted
+                    Text(p.latitude.fmt(6) + "°", style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Monospace, color = coordColor)
+                    Text(p.longitude.fmt(6) + "°", style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Monospace, color = coordColor)
+                }
+                Text(trust.reason, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    solution?.comparison?.let { c ->
+                        val n = c.independentConfirmations
+                        Tag(stringResource(R.string.tag_confirmations, n), if (n >= 2) Ok else Warn)
+                        Tag(stringResource(R.string.tag_sources, c.accepted.size, c.accepted.size + c.rejected.size), null)
+                    }
+                    solution?.anchor?.let { a ->
+                        if (a.anchor != null) Tag(
+                            stringResource(if (a.anchor!!.isAuto) R.string.tag_anchor_auto else R.string.tag_anchor) +
+                                (a.deviationM?.let { " · Δ ${it.fmt(0)} м" } ?: ""),
+                            if (a.state == AnchorState.ANCHOR_CONFLICT) Bad else Ok,
+                        )
+                    }
+                    solution?.gnss?.raim?.horizontalProtectionLevelM?.let { Tag("HPL ${it.fmt(0)} м", null) }
+                    p?.altitude?.let { Tag("h ${it.fmt(0)} м", null) }
+                }
+                if (p != null) EmptyHint(stringResource(R.string.coords_tap_to_copy))
+            }
+        }
+    }
+}
+
+@Composable
+private fun Tag(text: String, color: Color?) {
+    val c = color ?: MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(shape = CircleShape, color = c.copy(alpha = 0.12f), border = BorderStroke(1.dp, c.copy(alpha = 0.5f))) {
+        Text(text, Modifier.padding(horizontal = 10.dp, vertical = 3.dp), style = MaterialTheme.typography.labelMedium, color = c)
     }
 }
 

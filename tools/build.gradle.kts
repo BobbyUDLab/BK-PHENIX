@@ -25,3 +25,12 @@ tasks.register<JavaExec>("replay") {
     mainClass.set("ru.bkphenix.tools.ReplayKt")
     workingDir = rootDir
 }
+
+/** `./gradlew :tools:learnCells --args="learned.bklc phenix_*.jsonl"` — своя база вышек из прошлых журналов. */
+tasks.register<JavaExec>("learnCells") {
+    group = "application"
+    description = "Собирает свою обучаемую базу вышек (BKLC) из журналов приложения"
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("ru.bkphenix.tools.LearnCellsKt")
+    workingDir = rootDir
+}

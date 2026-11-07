@@ -74,6 +74,8 @@ data class CellSnapshot(
     val pci: Int?,
     val signalDbm: Int?,
     val timingAdvance: Int?,
+    /** Возраст по часам модема, мс; `null` — неизвестен. */
+    val ageMillis: Long? = null,
 )
 
 data class WifiSnapshot(

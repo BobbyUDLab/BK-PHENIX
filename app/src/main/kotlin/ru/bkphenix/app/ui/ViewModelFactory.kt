@@ -16,8 +16,8 @@ object ViewModelFactory {
         initializer { CoordinateViewModel(repository()) }
         initializer { SatellitesViewModel(repository()) }
         initializer { DiagnosticsViewModel(repository()) }
-        initializer { TrackViewModel(container().trackRecorder) }
-        initializer { container().let { MapViewModel(it.repository, it.trackRecorder, it.mapFiles, it.roadGraphs, it.terrainFiles) } }
+        initializer { container().let { TrackViewModel(it.trackRecorder, it.recording) } }
+        initializer { container().let { MapViewModel(it.repository, it.trackRecorder, it.recording, it.mapFiles, it.roadGraphs, it.terrainFiles) } }
     }
 
     private fun androidx.lifecycle.viewmodel.CreationExtras.container() =

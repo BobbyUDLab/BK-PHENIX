@@ -3,6 +3,7 @@ package ru.bkphenix.app.data.source
 import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
 import android.telephony.CellInfo
 import android.telephony.CellInfoGsm
 import android.telephony.CellInfoLte
@@ -52,13 +53,21 @@ class CellDataSource(private val context: Context) : DataSource("Сотовые 
                 val infos = guarded("getAllCellInfo") { tm.allCellInfo }
                 if (infos != null) {
                     setStatus(SourceStatus.Active)
-                    emit(infos.mapNotNull { it.toSnapshot() })
+                    emit(infos.mapNotNull { info -> info.toSnapshot()?.copy(ageMillis = info.ageMillis()) })
                 } else if (status.value !is SourceStatus.PermissionDenied) {
                     setStatus(SourceStatus.Unavailable("getAllCellInfo вернул пусто"))
                 }
             }
             delay(intervalMillis)
         }
+    }
+
+    /** Сколько миллисекунд назад модем обновил запись: вторая SIM в ожидании отдаёт кэш минутной давности. */
+    @Suppress("DEPRECATION")
+    private fun CellInfo.ageMillis(): Long? {
+        val now = SystemClock.elapsedRealtime()
+        val at = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) timestampMillis else timeStamp / 1_000_000
+        return (now - at).takeIf { at > 0 && it >= 0 }
     }
 
     @Suppress("DEPRECATION")

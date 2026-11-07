@@ -20,11 +20,19 @@ class TrackTest {
     }
 
     @Test
-    fun `недостоверная эпоха отбрасывается и сбрасывает предыдущую точку`() {
+    fun `испорченная эпоха отбрасывается и сбрасывает предыдущую точку`() {
         val t = TrackThinner()
         assertTrue(t.accept(TrackPoint(1_000, start, 5.0, "OK")))
-        assertFalse(t.accept(TrackPoint(2_000, start.offset(20.0, 90.0), 5.0, "INCONSISTENT")))
+        assertFalse(t.accept(TrackPoint(2_000, start.offset(20.0, 90.0), 5.0, "NAV_DATA_CORRUPTED")))
         assertTrue(t.accept(TrackPoint(3_000, start.offset(5_000.0, 90.0), 5.0, "OK")))
+    }
+
+    @Test
+    fun `эпоха без кворума и с отсеянным источником пишется в трек`() {
+        val t = TrackThinner()
+        assertTrue(t.accept(TrackPoint(1_000, start, 5.0, "OK")))
+        assertTrue(t.accept(TrackPoint(2_000, start.offset(20.0, 90.0), 5.0, "INCONSISTENT")))
+        assertTrue(t.accept(TrackPoint(3_000, start.offset(40.0, 90.0), 5.0, "SUSPICIOUS")))
     }
 
     @Test
@@ -36,13 +44,13 @@ class TrackTest {
     }
 
     @Test
-    fun `GPX фильтрует недостоверные точки и начинает новый сегмент после скачка`() {
+    fun `GPX фильтрует испорченные точки и начинает новый сегмент после скачка`() {
         val gpx = GpxWriter.write(
             "Трек",
             listOf(
                 TrackPoint(1_700_000_000_000, start, 3.25, "OK"),
-                TrackPoint(1_700_000_001_000, GeoPoint(55.8, 37.0), null, "SPOOFING_SUSPECTED"),
-                TrackPoint(1_700_000_001_000, GeoPoint(55.0, 37.0), null, "OK"),
+                TrackPoint(1_700_000_001_000, GeoPoint(55.8, 37.0), null, "NAV_DATA_CORRUPTED"),
+                TrackPoint(1_700_000_002_000, GeoPoint(55.0, 37.0), null, "OK"),
             ),
         )
         assertEquals(2, Regex("<trkseg>").findAll(gpx).count())

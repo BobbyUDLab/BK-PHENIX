@@ -27,5 +27,6 @@ object CellMapping {
         rsrpDbm = cell.signalDbm,
         timingAdvance = cell.timingAdvance,
         isServing = cell.isServing,
+        ageMillis = cell.ageMillis,
     )
 }

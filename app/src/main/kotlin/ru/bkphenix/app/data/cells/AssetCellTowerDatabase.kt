@@ -64,6 +64,6 @@ class AssetCellTowerDatabase(private val context: Context) : CellTowerDatabase {
         /** Имя в APK после распаковки aapt — первым, исходное — запасным. */
         val ASSET_NAMES = listOf("cells/cells-moscow.bin", ASSET)
         const val REGION = "Москва и Московская область"
-        const val SOURCE = "Mozilla Location Service, финальная выгрузка 2024 (CC0 1.0)"
+        const val SOURCE = "OpenCelliD (CC BY-SA 4.0), 2025–2026 + Mozilla Location Service 2024 (CC0 1.0)"
     }
 }

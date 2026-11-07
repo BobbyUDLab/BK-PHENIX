@@ -29,6 +29,7 @@ import ru.bkphenix.app.data.model.NetworkTimeSample
 import ru.bkphenix.app.data.model.SensorKind
 import ru.bkphenix.app.data.model.RawLocation
 import kotlin.math.abs
+import kotlinx.coroutines.withContext
 import ru.bkphenix.app.data.model.SensorSnapshot
 import ru.bkphenix.core.inertial.DeadReckoningSource
 import ru.bkphenix.core.terrain.GrossAltitudeVeto
@@ -76,6 +77,7 @@ import ru.bkphenix.core.radio.CellTowerDatabase
 import ru.bkphenix.app.data.cells.AssetCellTowerDatabase
 import ru.bkphenix.app.data.cells.CellDatabaseInfo
 import ru.bkphenix.core.radio.EmptyCellTowerDatabase
+import ru.bkphenix.core.radio.LearnedCellDatabase
 
 /** Статистика проверки чётности GPS LNAV. */
 data class NavigationStats(val words: Long = 0, val parityFailures: Long = 0)
@@ -99,6 +101,8 @@ class PhenixRepository(
     private val logRecorder: RawLogRecorder,
     private val rinex: RinexEphemerisSource,
     cellTowers: CellTowerDatabase = EmptyCellTowerDatabase,
+    /** Файл своей обучаемой базы вышек; null — база живёт только в памяти. */
+    private val learnedCellsFile: java.io.File? = null,
     /** Дорожный граф для привязки к дорогам; null — привязка выключена. */
     private val roads: RoadGraphStore? = null,
     /** Рельеф и геоид для проверки высоты ГНСС; null — проверка выключена. */
@@ -112,7 +116,14 @@ class PhenixRepository(
     private val scope = CoroutineScope(SupervisorJob() + coreDispatcher)
     private val core = PhenixCore()
     private val cellTowers = cellTowers
-    private val cellLocator = CellLocator(cellTowers)
+    /** Своя обучаемая база поверх офлайн-базы: где телефон видел соты при надёжной позиции. */
+    private val learnedCells = LearnedCellDatabase(cellTowers)
+    private val cellLocator = CellLocator(learnedCells)
+    private val _learnedCellCount = MutableStateFlow(0)
+    /** Сколько сот и станций своя база уже знает надёжно — для диагностики. */
+    val learnedCellCount: StateFlow<Int> = _learnedCellCount.asStateFlow()
+    private var learnedDirty = false
+    private var learnedSavedAt = 0L
 
     /** Офлайн-база вышек: сколько сот и откуда, или null, если не загружена. */
     val cellDatabaseInfo: StateFlow<CellDatabaseInfo?> =
@@ -220,6 +231,7 @@ class PhenixRepository(
         if (job?.isActive == true) return
         job = scope.launch {
             (cellTowers as? AssetCellTowerDatabase)?.let { launch { it.load() } }
+            launch { loadLearnedCells() }
             roads?.let { launch { it.load() } }
             terrain?.let { launch { it.load() } }
             _capabilities.value = gnss.capabilities()
@@ -284,6 +296,7 @@ class PhenixRepository(
 
     @Synchronized
     fun stop() {
+        scope.launch { saveLearnedCells(force = true) }
         job?.cancel()
         job = null
         _running.value = false
@@ -390,6 +403,7 @@ class PhenixRepository(
         // Независимость привязки и запрет подпитки собственным итогом — в DeadReckoningSource.onSolution.
         deadReckoning.onSolution(solution, rt)
         solution.point?.let { updateDeclination(it, now) }
+        learnCells(solution, now)
         if (logRecorder.isRecording) {
             logRecorder.json(
                 "epoch",
@@ -407,6 +421,70 @@ class PhenixRepository(
                     gnssSpeedMps = motionCheck.gnssSpeedMps,
                 ),
             )
+        }
+    }
+
+    /**
+     * Обучение своей базы вышек — только по фиксу чипа при целостности «OK», без запрета ГНСС по высоте и движению,
+     * с точностью не хуже 30 м и в пределах 30 м от итога: подменённая ГНСС не должна отравить базу, а итог,
+     * собранный из самих вышек, — учить их по себе.
+     */
+    private fun learnCells(solution: PhenixSolution, now: Long) {
+        if (solution.integrity.state != IntegrityState.OK || altitudeVeto.active || motionVeto) return
+        val gps = lastGps?.takeIf { abs(now - it.timeMillis) < GPS_FRESH_MILLIS && !it.isMock } ?: return
+        val acc = gps.accuracy68M?.toDouble() ?: return
+        val point = GeoPoint(gps.latitude, gps.longitude)
+        val out = solution.point ?: return
+        if (out.distanceTo(point) > LearnedCellDatabase.MAX_ACCURACY_M) return
+        val cellsNow = _cells.value.map(CellMapping::toMeasurement)
+        if (learnedCells.learn(cellsNow, point, acc, now) > 0) {
+            learnedDirty = true
+            _learnedCellCount.value = learnedCells.matureCount
+        }
+        if (now - learnedSavedAt > LEARNED_SAVE_MILLIS) saveLearnedCells(force = false)
+    }
+
+    private suspend fun loadLearnedCells() {
+        val file = learnedCellsFile ?: return
+        val bytes = withContext(Dispatchers.IO) { runCatching { file.takeIf { it.exists() }?.readBytes() }.getOrNull() } ?: return
+        runCatching { learnedCells.merge(bytes.inputStream()) }.onFailure { Log.w(TAG, "Своя база вышек не прочитана", it) }
+        _learnedCellCount.value = learnedCells.matureCount
+        learnedSavedAt = clock()
+    }
+
+    /** Снимок пишется в потоке ядра, на диск — в IO через временный файл (обрыв записи не портит базу). */
+    private fun saveLearnedCells(force: Boolean) {
+        val file = learnedCellsFile ?: return
+        // Сохраняем, только если есть что: и по таймеру, и при остановке (force — не ждать таймера).
+        if (!learnedDirty || (!force && clock() - learnedSavedAt < LEARNED_SAVE_MILLIS)) return
+        learnedDirty = false
+        learnedSavedAt = clock()
+        val bytes = java.io.ByteArrayOutputStream().also { learnedCells.write(it) }.toByteArray()
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                file.parentFile?.mkdirs()
+                val tmp = java.io.File(file.path + ".tmp")
+                tmp.writeBytes(bytes)
+                if (!tmp.renameTo(file)) { file.delete(); tmp.renameTo(file) }
+            }.onFailure { Log.w(TAG, "Своя база вышек не сохранена", it) }
+        }
+    }
+
+    /** Экспорт своей базы вышек (формат BKLC 1) — перенести на другой телефон или сохранить. */
+    suspend fun exportLearnedCells(out: java.io.OutputStream) {
+        val bytes = withContext(coreDispatcher) { java.io.ByteArrayOutputStream().also { learnedCells.write(it) }.toByteArray() }
+        withContext(Dispatchers.IO) { out.write(bytes); out.flush() }
+    }
+
+    /** Импорт: соты складываются со своими, а не затирают их. Возвращает число прочитанных записей. */
+    suspend fun importLearnedCells(input: java.io.InputStream): Int {
+        val bytes = withContext(Dispatchers.IO) { input.readBytes() }
+        return withContext(coreDispatcher) {
+            learnedCells.merge(bytes.inputStream()).also {
+                learnedDirty = true
+                _learnedCellCount.value = learnedCells.matureCount
+                saveLearnedCells(force = true)
+            }
         }
     }
 
@@ -442,5 +520,6 @@ class PhenixRepository(
         const val RINEX_RETRY_MILLIS = 10 * 60_000L
         const val GNSS_TIME_UNCERTAINTY_MS = 1_000L
         const val DECLINATION_REFRESH_M = 10_000.0
+        const val LEARNED_SAVE_MILLIS = 5 * 60_000L
     }
 }

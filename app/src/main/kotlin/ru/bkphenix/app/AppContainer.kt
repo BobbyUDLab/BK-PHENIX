@@ -37,6 +37,7 @@ class AppContainer(context: Context) {
             networkTimeSource = NetworkTimeDataSource(app),
             rinex = RinexEphemerisSource(File(app.filesDir, "ephemeris")),
             cellTowers = AssetCellTowerDatabase(app),
+            learnedCellsFile = File(app.filesDir, "cells/learned.bklc"),
             roads = roadGraphs,
             terrain = terrainFiles,
             logRecorder = RawLogRecorder(File(app.filesDir, "logs")) {

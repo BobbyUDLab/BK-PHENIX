@@ -43,10 +43,12 @@ class AnchorCarDriveTest {
             if (s == 1200) {
                 val a = sol.anchor
                 assertEquals(AnchorState.HUMAN_ANCHOR, a.state)
-                assertTrue(a.traveledM!! in 17_000.0..19_500.0, "путь ${a.traveledM}")
                 assertTrue(a.propagatedPoint!!.distanceTo(truth(s)) < 50.0)
-                // σ = √(10² + (0.02·1200)² + (0.03·18000)²) ≈ 540 м > 300 м — пора обновить.
-                assertEquals(AnchorFreshness.MUST_UPDATE, a.freshness)
+                // С 0.8 автоякорь работает во всех режимах: при кворуме (GNSS + соты) якорь продлевается,
+                // поэтому через 20 мин он свежий (без продления σ ≈ 540 м и «пора обновить»), а ручной сохранён.
+                assertEquals(AnchorMode.AUTOMATIC, a.anchor!!.mode)
+                assertEquals(AnchorMode.MANUAL, a.lastHumanAnchor!!.mode)
+                assertEquals(AnchorFreshness.ACTUAL, a.freshness)
             }
         }
         assertTrue(maxErr < 50.0, "макс. ошибка $maxErr м")

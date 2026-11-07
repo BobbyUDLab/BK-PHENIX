@@ -83,13 +83,14 @@ public class AnchorManager(
     private var maxSpeedMps: Double = WALK_MAX_SPEED_MPS,
 ) {
     /**
-     * Режим движения. В «Авто» якорь продлевается сам (автоякорь) на остановках и при доверенных позициях;
-     * первый якорь всегда ставит человек. В «Пешком» — только ручной якорь и строгие правила.
+     * Режим движения. Во всех режимах якорь продлевается сам (автоякорь) на остановках и при доверенных
+     * позициях; первый якорь всегда ставит человек. Режим задаёт предельную скорость, с которой растёт σ якоря:
+     * пешком 3 м/с, в «Авто» и «Без привязки» — 50 м/с (без привязки может быть и машина).
      */
     public var motionMode: MotionMode = MotionMode.WALK
         set(value) {
             field = value
-            maxSpeedMps = if (value == MotionMode.CAR) CAR_MAX_SPEED_MPS else WALK_MAX_SPEED_MPS
+            maxSpeedMps = if (value == MotionMode.WALK) WALK_MAX_SPEED_MPS else CAR_MAX_SPEED_MPS
         }
     public var lastHumanAnchor: Anchor? = null
         private set
@@ -158,14 +159,14 @@ public class AnchorManager(
     }
 
     /**
-     * Автоякорь (только «Авто», только после ручного): на остановке при согласии источников или после
+     * Автоякорь (во всех режимах, только после ручного): на остановке при согласии источников или после
      * [TRUSTED_EPOCHS] эпох подряд доверенных позиций (кворум, малая σ). При подозрении на подмену — никогда:
      * автоякорь не может подтвердить сам себя.
      */
     private fun maybeAutoRenew(
         estimate: GeoPoint?, sigma: Double?, nowMillis: Long, quorum: Boolean, spoofSuspected: Boolean, agreeing: String?,
     ) {
-        if (motionMode != MotionMode.CAR || lastHumanAnchor == null) return
+        if (lastHumanAnchor == null) return
         if (estimate == null || sigma == null || spoofSuspected) { trustedStreak = 0; return }
         recent.addLast(nowMillis to estimate)
         while (recent.isNotEmpty() && nowMillis - recent.first().first > STOP_WINDOW_MS) recent.removeFirst()

@@ -30,6 +30,7 @@ object RawMeasurementMapping {
         state: Int,
         pseudorangeRateMps: Double?,
         agcDb: Double?,
+        pseudorangeRateUncertaintyMps: Double? = null,
     ): RawGnssMeasurement = RawGnssMeasurement(
         sat = SatId(GnssMapping.constellation(constellationType), svid),
         band = GnssMapping.band(carrierFrequencyHz),
@@ -40,6 +41,7 @@ object RawMeasurementMapping {
         towKnown = MeasurementState.isTimeKnown(GnssMapping.constellation(constellationType), state),
         pseudorangeRateMps = pseudorangeRateMps,
         agcDb = agcDb,
+        pseudorangeRateUncertaintyMps = pseudorangeRateUncertaintyMps,
     )
 
     fun clock(

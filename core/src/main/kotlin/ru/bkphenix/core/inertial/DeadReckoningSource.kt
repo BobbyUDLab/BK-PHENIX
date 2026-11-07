@@ -36,6 +36,10 @@ public class DeadReckoningSource(private val navigator: InertialNavigator = Iner
     @Synchronized
     public fun estimate(realtimeMillis: Long): InertialEstimate? = navigator.estimate(realtimeMillis)
 
+    /** Что датчики знают о движении (шаги, покой, поворот) на момент [realtimeMillis]. */
+    @Synchronized
+    public fun motionSummary(realtimeMillis: Long): MotionSummary? = navigator.sensing.summary(realtimeMillis * 1_000_000)
+
     /** Наблюдение для компаратора или null, если счисление не инициализировано или σ вышла за предел режима. */
     @Synchronized
     public fun observation(realtimeMillis: Long, wallMillis: Long): PositionObservation? {

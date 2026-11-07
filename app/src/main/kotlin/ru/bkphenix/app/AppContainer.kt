@@ -16,6 +16,7 @@ import ru.bkphenix.app.data.source.RinexEphemerisSource
 import ru.bkphenix.app.data.source.SensorDataSource
 import ru.bkphenix.app.data.source.WifiDataSource
 import ru.bkphenix.app.data.track.TrackDatabase
+import ru.bkphenix.app.data.track.RecordingController
 import ru.bkphenix.app.data.track.TrackRecorder
 import ru.bkphenix.app.ui.theme.ThemePreferences
 import ru.bkphenix.app.data.roads.RoadGraphStore
@@ -54,6 +55,8 @@ class AppContainer(context: Context) {
     val trackRecorder: TrackRecorder by lazy {
         TrackRecorder(TrackDatabase.create(app).tracks(), repository.solution, File(app.filesDir, "gpx"))
     }
+
+    val recording: RecordingController by lazy { RecordingController(trackRecorder, repository) }
 
     val mapFiles: MapFileStore by lazy { MapFileStore(app) }
 

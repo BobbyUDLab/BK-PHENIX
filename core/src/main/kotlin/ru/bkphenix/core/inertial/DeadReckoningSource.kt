@@ -33,6 +33,10 @@ public class DeadReckoningSource(private val navigator: InertialNavigator = Iner
     @Synchronized
     public fun onImu(sample: ImuSample): Unit = navigator.onImu(sample)
 
+    /** Истинный курс верха телефона по компасу, градусы; null — магнитометра нет. Для поворота карты «по курсу». */
+    @Synchronized
+    public fun compassHeadingDeg(): Double? = navigator.compassHeadingDeg
+
     @Synchronized
     public fun estimate(realtimeMillis: Long): InertialEstimate? = navigator.estimate(realtimeMillis)
 

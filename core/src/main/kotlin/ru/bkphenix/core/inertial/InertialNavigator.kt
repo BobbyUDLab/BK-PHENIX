@@ -78,6 +78,9 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
     /** Истинный курс оси y телефона, градусы от севера. */
     public val headingDeg: Double get() = normalizeDeg(orientation.headingDeg + declinationDeg)
 
+    /** Курс по компасу (верх телефона) или null, если магнитометра ещё не было — тогда курс только по гироскопу. */
+    public val compassHeadingDeg: Double? get() = if (magSeen) headingDeg else null
+
     public fun onImu(s: ImuSample) {
         val prev = lastImuNanos
         lastImuNanos = s.timeNanos

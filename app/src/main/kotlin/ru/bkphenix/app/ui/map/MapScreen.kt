@@ -2,6 +2,31 @@ package ru.bkphenix.app.ui.map
 
 import ru.bkphenix.app.ui.theme.LocalIsOled
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import kotlinx.coroutines.delay
+import ru.bkphenix.app.ui.theme.LocalStatusColors
+import ru.bkphenix.core.PhenixSolution
+import ru.bkphenix.core.integrity.PointTrust
+import ru.bkphenix.core.integrity.PointTrustLevel
+import ru.bkphenix.core.track.HeldPosition
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -14,9 +39,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -108,8 +131,11 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
         uri?.let(viewModel::importRoads)
     }
     val northUp by viewModel.northUp.collectAsStateWithLifecycle()
+    val heading by viewModel.heading.collectAsStateWithLifecycle()
+    val logState by viewModel.logState.collectAsStateWithLifecycle()
     var follow by remember { mutableStateOf(true) }
     var placingAnchor by remember { mutableStateOf(false) }
+    var layersOpen by remember { mutableStateOf(false) }
     var bearing by remember { mutableStateOf(0.0) }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var style by remember { mutableStateOf<Style?>(null) }
@@ -120,8 +146,11 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
             getMapAsync { m ->
                 m.uiSettings.isAttributionEnabled = true
                 m.uiSettings.isLogoEnabled = false
-                // Свой компас: кнопка «Север вверх / по курсу» (встроенный скрывается при севере вверху).
+                // Свой компас (кнопка справа сверху), встроенный выключен.
                 m.uiSettings.isCompassEnabled = false
+                // Атрибуция — внизу слева над панелью скорости не нужна: прижимаем к верху под переключателями.
+                m.uiSettings.attributionGravity = android.view.Gravity.TOP or android.view.Gravity.START
+                m.uiSettings.setAttributionMargins(24, 150, 0, 0)
                 m.addOnCameraMoveListener { bearing = m.cameraPosition.bearing }
                 m.cameraPosition = CameraPosition.Builder().target(LatLng(MOSCOW.latitude, MOSCOW.longitude)).zoom(10.0).build()
                 m.addOnCameraMoveStartedListener { reason ->
@@ -155,7 +184,7 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
     LaunchedEffect(style, solution, held, track, road) {
         style?.let { MapLayers.update(it, solution, held, track, road.takeIf { motionMode != MotionMode.NONE }) }
     }
-    // «Север вверх»: поворот пальцами выключен, чтобы карта случайно не разворачивалась.
+    // «Север вверх»: поворот пальцами выключен, чтобы карта случайно не разворачивалась; «По курсу» — включён.
     LaunchedEffect(map, northUp) {
         val m = map ?: return@LaunchedEffect
         m.uiSettings.isRotateGesturesEnabled = !northUp
@@ -163,19 +192,33 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
             m.easeCamera(CameraUpdateFactory.bearingTo(0.0), EASE_MILLIS)
         }
     }
-    // Камера: в режиме «Местоположение» следует за позицией; в «Авто» — по курсу, если не «Север вверх».
-    LaunchedEffect(map, held, follow, viewMode, motionMode, northUp, placingAnchor) {
+    // Камера следует за позицией одним циклом: точка и поворот вместе, чтобы анимации не перебивали друг друга.
+    // «По курсу»: в машине на скорости — курс движения, иначе — компас (куда смотрит верх телефона).
+    // До 0.8 поворот брался только из курса ГНСС в режиме «Авто», пешком и без режима карта всегда стояла севером вверх.
+    val latestHeld by rememberUpdatedState(held)
+    val latestHeading by rememberUpdatedState(heading)
+    LaunchedEffect(map, follow, viewMode, motionMode, northUp, placingAnchor) {
         val m = map ?: return@LaunchedEffect
-        val h = held ?: return@LaunchedEffect
         if (viewMode != MapViewMode.LOCATION || !follow || placingAnchor) return@LaunchedEffect
-        val camera = CameraPosition.Builder().target(LatLng(h.point.latitude, h.point.longitude))
-        when (motionMode) {
-            MotionMode.CAR -> camera.zoom(maxOf(m.cameraPosition.zoom, 15.0))
-                .bearing(if (northUp) 0.0 else h.bearingDeg ?: m.cameraPosition.bearing)
-            MotionMode.WALK -> camera.zoom(maxOf(m.cameraPosition.zoom, 16.5)).bearing(if (northUp) 0.0 else m.cameraPosition.bearing)
-            MotionMode.NONE -> camera.zoom(m.cameraPosition.zoom).bearing(if (northUp) 0.0 else m.cameraPosition.bearing)
+        var first = true
+        while (true) {
+            latestHeld?.let { h ->
+                val cam = m.cameraPosition
+                val zoom = when (motionMode) {
+                    MotionMode.CAR -> maxOf(cam.zoom, 15.0)
+                    MotionMode.WALK -> maxOf(cam.zoom, 16.5)
+                    MotionMode.NONE -> cam.zoom
+                }
+                val targetBearing = if (northUp) 0.0 else courseBearing(h, latestHeading, motionMode) ?: cam.bearing
+                val moved = cam.target?.let { GeoPoint(it.latitude, it.longitude).distanceTo(h.point) } ?: Double.MAX_VALUE
+                if (first || moved > 0.5 || angleDiff(cam.bearing, targetBearing) > 2.0 || zoom != cam.zoom) {
+                    val update = CameraPosition.Builder().target(LatLng(h.point.latitude, h.point.longitude)).zoom(zoom).bearing(targetBearing).build()
+                    m.easeCamera(CameraUpdateFactory.newCameraPosition(update), if (first) EASE_MILLIS else FOLLOW_STEP_MILLIS)
+                }
+                first = false
+            }
+            delay(FOLLOW_STEP_MILLIS.toLong())
         }
-        m.easeCamera(CameraUpdateFactory.newCameraPosition(camera.build()), EASE_MILLIS)
     }
     LaunchedEffect(map, viewMode) {
         val m = map ?: return@LaunchedEffect
@@ -197,101 +240,294 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
                 color = MaterialTheme.colorScheme.primary,
             )
         }
-        Surface(
-            Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(8.dp),
-            shape = MaterialTheme.shapes.medium,
-            tonalElevation = 3.dp,
-            shadowElevation = 3.dp,
+
+        // Сверху слева — компактные переключатели: что показывать и как привязывать.
+        Row(
+            Modifier.align(Alignment.TopStart).padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    MapViewMode.entries.forEach { mode ->
-                        FilterChip(selected = viewMode == mode, onClick = { viewModel.setViewMode(mode) }, label = { Text(mode.displayName) })
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    MotionMode.entries.forEach { mode ->
-                        FilterChip(selected = motionMode == mode, onClick = { viewModel.setMotionMode(mode) }, label = { Text(mode.displayName) })
-                    }
-                }
-                val h = held
-                Text(
-                    when {
-                        h == null -> stringResource(R.string.map_no_position)
-                        else -> stringResource(R.string.map_status, ErrorCircle.radius(h.accuracyM).fmt(0), (h.speedMps * 3.6).fmt(0)) +
-                            (solution?.gnss?.raim?.horizontalProtectionLevelM?.let { " · " + stringResource(R.string.map_hpl, it.fmt(0)) } ?: "") +
-                            (if (h.deadReckoning) " · " + stringResource(R.string.map_dead_reckoning) else if (h.extrapolated) " · " + stringResource(R.string.map_held) else "")
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                heightLine(terrain, vertical)?.let { (text, alarm) ->
-                    Text(text, style = MaterialTheme.typography.bodySmall, color = if (alarm) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
-                }
-                roadLine(motionMode, roadGraph, road)?.let { (text, alarm) ->
-                    Text(text, style = MaterialTheme.typography.bodySmall, color = if (alarm) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+            Pill {
+                ModeIcon(viewMode == MapViewMode.LOCATION, R.drawable.ic_my_location, MapViewMode.LOCATION.displayName) { viewModel.setViewMode(MapViewMode.LOCATION) }
+                ModeIcon(viewMode == MapViewMode.TRACK, R.drawable.ic_timeline, MapViewMode.TRACK.displayName) { viewModel.setViewMode(MapViewMode.TRACK) }
+            }
+            Pill {
+                MotionMode.entries.forEach { mode ->
+                    ModeIcon(motionMode == mode, mode.icon(), mode.displayName) { viewModel.setMotionMode(mode) }
                 }
             }
         }
+
+        // Сверху справа — компас и слои (рельеф, дороги, карта).
         Column(
-            Modifier.align(Alignment.BottomEnd).padding(12.dp),
+            Modifier.align(Alignment.TopEnd).padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.End,
         ) {
-            // Компас: стрелка показывает север; нажатие — «Север вверх» ⇄ «По курсу».
-            SmallFloatingActionButton(onClick = { viewModel.setNorthUp(!northUp) }) {
-                Row(Modifier.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("▲", Modifier.size(20.dp).rotate(-bearing.toFloat()), color = MaterialTheme.colorScheme.error)
-                    Text(
-                        stringResource(if (northUp) R.string.map_north_up else R.string.map_course_up),
-                        Modifier.padding(start = 6.dp),
-                    )
+            CompassButton(bearing, northUp) { viewModel.setNorthUp(!northUp) }
+            Box {
+                RoundButton(R.drawable.ic_layers, stringResource(R.string.map_layers)) { layersOpen = true }
+                DropdownMenu(expanded = layersOpen, onDismissRequest = { layersOpen = false }) {
+                    LayerItem(R.drawable.ic_terrain, stringResource(R.string.map_layer_terrain), terrainLabel(terrain)) {
+                        layersOpen = false; terrainPicker.launch(arrayOf("*/*"))
+                    }
+                    LayerItem(R.drawable.ic_road, stringResource(R.string.map_layer_roads), roadsLabel(roadGraph)) {
+                        layersOpen = false; roadPicker.launch(arrayOf("*/*"))
+                    }
+                    LayerItem(R.drawable.ic_map, stringResource(R.string.map_layer_map), stringResource(R.string.map_layer_ready)) {
+                        layersOpen = false; onReimport()
+                    }
                 }
             }
+        }
+
+        // Снизу слева — скорость, точность и сигналы целостности.
+        SpeedPanel(
+            Modifier.align(Alignment.BottomStart).padding(8.dp),
+            held, solution, heightLine(terrain, vertical), roadLine(motionMode, roadGraph, road), vertical, road.takeIf { motionMode != MotionMode.NONE },
+        )
+
+        // Снизу справа — действия.
+        Column(
+            Modifier.align(Alignment.BottomEnd).padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalAlignment = Alignment.End,
+        ) {
             if (placingAnchor) {
-                SmallFloatingActionButton(onClick = {
-                    map?.cameraPosition?.target?.let { target ->
-                        viewModel.setAnchor(GeoPoint(target.latitude, target.longitude))
-                        Toast.makeText(context, R.string.map_anchor_set, Toast.LENGTH_SHORT).show()
-                    }
-                    placingAnchor = false
-                    follow = true
-                }) { Text(stringResource(R.string.map_anchor_confirm), Modifier.padding(8.dp)) }
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        map?.cameraPosition?.target?.let { target ->
+                            viewModel.setAnchor(GeoPoint(target.latitude, target.longitude))
+                            Toast.makeText(context, R.string.map_anchor_set, Toast.LENGTH_SHORT).show()
+                        }
+                        placingAnchor = false
+                        follow = true
+                    },
+                    icon = { Icon(painterResource(R.drawable.ic_anchor), null) },
+                    text = { Text(stringResource(R.string.map_anchor_confirm)) },
+                )
                 OutlinedButton(onClick = { placingAnchor = false; follow = true }) { Text(stringResource(R.string.map_anchor_cancel)) }
             } else {
                 if (!follow && viewMode == MapViewMode.LOCATION) {
-                    SmallFloatingActionButton(onClick = { follow = true }) { Text(stringResource(R.string.map_center), Modifier.padding(8.dp)) }
+                    RoundButton(R.drawable.ic_my_location, stringResource(R.string.map_center)) { follow = true }
                 }
-                SmallFloatingActionButton(onClick = {
+                if (solution?.anchor?.anchor != null) {
+                    RoundButton(null, stringResource(R.string.map_anchor_clear), text = "✕") { viewModel.clearAnchor() }
+                }
+                RoundButton(R.drawable.ic_anchor, stringResource(if (solution?.anchor?.anchor != null) R.string.map_anchor_move else R.string.map_anchor_place)) {
                     // Начинаем с текущей позиции (или там, где сейчас карта); дальше вы двигаете карту под перекрестие.
                     follow = false
                     placingAnchor = true
                     viewModel.setViewMode(MapViewMode.LOCATION)
                     held?.let { h -> map?.easeCamera(CameraUpdateFactory.newLatLng(LatLng(h.point.latitude, h.point.longitude)), EASE_MILLIS) }
                     Toast.makeText(context, R.string.map_anchor_hint, Toast.LENGTH_LONG).show()
-                }) { Text(stringResource(if (solution?.anchor?.anchor != null) R.string.map_anchor_move else R.string.map_anchor_place), Modifier.padding(8.dp)) }
-                if (solution?.anchor?.anchor != null) {
-                    SmallFloatingActionButton(onClick = viewModel::clearAnchor) { Text(stringResource(R.string.map_anchor_clear), Modifier.padding(8.dp)) }
+                }
+                RecordButton(recording.recording, recording.points, logState.bytes, viewModel::toggleTrack)
+            }
+        }
+    }
+}
+
+/** Курс для режима «По курсу»: в машине на скорости — курс движения, иначе компас; null — нечем повернуть. */
+private fun courseBearing(h: HeldPosition, compass: Double?, mode: MotionMode): Double? {
+    val moving = h.bearingDeg?.takeIf { h.speedMps >= COURSE_MIN_SPEED_MPS }
+    return if (mode == MotionMode.CAR) moving ?: compass else compass ?: moving
+}
+
+private fun angleDiff(a: Double, b: Double): Double {
+    val d = ((a - b) % 360 + 540) % 360 - 180
+    return abs(d)
+}
+
+private fun MotionMode.icon(): Int = when (this) {
+    MotionMode.NONE -> R.drawable.ic_block
+    MotionMode.WALK -> R.drawable.ic_walk
+    MotionMode.CAR -> R.drawable.ic_car
+}
+
+@Composable
+private fun Pill(content: @Composable RowScope.() -> Unit) {
+    Surface(shape = CircleShape, tonalElevation = 3.dp, shadowElevation = 3.dp, color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)) {
+        Row(Modifier.padding(3.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), content = content)
+    }
+}
+
+@Composable
+private fun ModeIcon(selected: Boolean, icon: Int, description: String, onClick: () -> Unit) {
+    val bg = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent
+    val fg = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+    Box(
+        Modifier.size(36.dp).clip(CircleShape).background(bg).clickable(onClickLabel = description, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { Icon(painterResource(icon), contentDescription = description, tint = fg, modifier = Modifier.size(20.dp)) }
+}
+
+@Composable
+private fun RoundButton(icon: Int?, description: String, text: String? = null, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        tonalElevation = 3.dp,
+        shadowElevation = 3.dp,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+        modifier = Modifier.size(44.dp),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            if (icon != null) Icon(painterResource(icon), contentDescription = description, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(22.dp))
+            else Text(text ?: "", style = MaterialTheme.typography.titleMedium)
+        }
+    }
+}
+
+/** Компас: красная стрелка — север. Нажатие — «Север вверх» ⇄ «По курсу» (подпись под стрелкой). */
+@Composable
+private fun CompassButton(bearing: Double, northUp: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        tonalElevation = 3.dp,
+        shadowElevation = 3.dp,
+        color = if (northUp) MaterialTheme.colorScheme.surface.copy(alpha = 0.95f) else MaterialTheme.colorScheme.primaryContainer,
+        modifier = Modifier.size(52.dp),
+    ) {
+        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Icon(
+                painterResource(R.drawable.ic_navigation),
+                contentDescription = stringResource(if (northUp) R.string.map_north_up else R.string.map_course_up),
+                tint = LocalStatusColors.current.bad,
+                modifier = Modifier.size(22.dp).rotate(-bearing.toFloat()),
+            )
+            Text(if (northUp) "С" else stringResource(R.string.map_course_short), style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+@Composable
+private fun LayerItem(icon: Int, title: String, status: String, onClick: () -> Unit) {
+    DropdownMenuItem(
+        leadingIcon = { Icon(painterResource(icon), contentDescription = null) },
+        text = {
+            Column {
+                Text(title)
+                Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        onClick = onClick,
+    )
+}
+
+@Composable
+private fun terrainLabel(t: TerrainState): String = when (t) {
+    is TerrainState.Ready -> stringResource(R.string.map_layer_ready)
+    is TerrainState.Importing -> stringResource(R.string.map_importing, t.copiedBytes / (1 shl 20))
+    is TerrainState.Loading -> stringResource(R.string.map_terrain_loading)
+    is TerrainState.Failed -> t.message
+    is TerrainState.Missing -> stringResource(R.string.map_layer_missing)
+}
+
+@Composable
+private fun roadsLabel(g: RoadGraphState): String = when (g) {
+    is RoadGraphState.Ready -> stringResource(R.string.map_layer_ready)
+    is RoadGraphState.Importing -> stringResource(R.string.map_importing, g.copiedBytes / (1 shl 20))
+    is RoadGraphState.Loading -> stringResource(R.string.map_roads_loading)
+    is RoadGraphState.Failed -> g.message
+    is RoadGraphState.Missing -> stringResource(R.string.map_layer_missing)
+}
+
+/** Запись трека и журнала: красная кнопка, во время записи — квадрат «стоп», число точек и объём журнала. */
+@Composable
+private fun RecordButton(recording: Boolean, points: Int, logBytes: Long, onClick: () -> Unit) {
+    val red = LocalStatusColors.current.bad
+    if (recording) {
+        ExtendedFloatingActionButton(
+            onClick = onClick,
+            containerColor = red,
+            contentColor = Color.White,
+            icon = { Icon(painterResource(R.drawable.ic_stop), contentDescription = stringResource(R.string.action_track_stop)) },
+            text = { Text(stringResource(R.string.map_recording, points, (logBytes / (1 shl 20)).toInt())) },
+        )
+    } else {
+        FloatingActionButton(onClick = onClick, containerColor = MaterialTheme.colorScheme.surface, contentColor = red) {
+            Icon(painterResource(R.drawable.ic_record), contentDescription = stringResource(R.string.action_track_start), modifier = Modifier.size(26.dp))
+        }
+    }
+}
+
+/**
+ * Панель внизу слева: крупная скорость, точность (цвет — доверие к точке), HPL и чипы высоты и дороги.
+ * Нажатие раскрывает подробные строки высоты и привязки.
+ */
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun SpeedPanel(
+    modifier: Modifier,
+    held: HeldPosition?,
+    solution: PhenixSolution?,
+    heightText: Pair<String, Boolean>?,
+    roadText: Pair<String, Boolean>?,
+    vertical: VerticalCheck?,
+    road: MatchResult?,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val status = LocalStatusColors.current
+    val trust = PointTrust.of(solution)
+    val trustColor = when (trust.level) {
+        PointTrustLevel.RELIABLE -> status.ok
+        PointTrustLevel.LIMITED, PointTrustLevel.UNRELIABLE -> status.warn
+        PointTrustLevel.ALARM -> status.bad
+        PointTrustLevel.NONE -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Surface(
+        onClick = { expanded = !expanded },
+        modifier = modifier.widthIn(max = 240.dp),
+        shape = MaterialTheme.shapes.large,
+        tonalElevation = 3.dp,
+        shadowElevation = 3.dp,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (held == null) {
+                Text(stringResource(R.string.map_no_position), style = MaterialTheme.typography.titleMedium, color = status.bad)
+                Text(trust.reason, style = MaterialTheme.typography.bodySmall)
+            } else {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text((held.speedMps * 3.6).fmt(0), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
+                    Text(" км/ч", Modifier.padding(bottom = 6.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.padding(bottom = 4.dp)) {
+                        Text("±${ErrorCircle.radius(held.accuracyM).fmt(0)} м", style = MaterialTheme.typography.titleMedium, color = trustColor, fontWeight = FontWeight.SemiBold)
+                        Text(trust.level.displayName, style = MaterialTheme.typography.labelSmall, color = trustColor)
+                    }
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    solution?.gnss?.raim?.horizontalProtectionLevelM?.let { Chip("HPL ${it.fmt(0)} м", null) }
+                    if (held.deadReckoning) Chip(stringResource(R.string.map_chip_dr), status.warn)
+                    else if (held.extrapolated) Chip(stringResource(R.string.map_chip_held), status.warn)
+                    vertical?.residualM?.let { r ->
+                        val bad = vertical?.thresholdM?.let { abs(r) > it } == true
+                        Chip("Δh ${if (r >= 0) "+" else ""}${r.fmt(0)} м", if (bad) status.bad else status.ok)
+                    }
+                    road?.let { m ->
+                        Chip(
+                            m.distanceToRoadM?.let { "⟂ ${it.fmt(0)} м" } ?: "⟂ —",
+                            if (m.offRoad) status.bad else status.ok,
+                        )
+                    }
                 }
             }
-            SmallFloatingActionButton(onClick = viewModel::toggleTrack) {
-                Text(
-                    if (recording.recording) stringResource(R.string.map_track_stop, recording.points) else stringResource(R.string.action_track_start),
-                    Modifier.padding(8.dp),
-                )
+            if (expanded) {
+                heightText?.let { (t, alarm) -> Text(t, style = MaterialTheme.typography.bodySmall, color = if (alarm) status.bad else MaterialTheme.colorScheme.onSurface) }
+                roadText?.let { (t, alarm) -> Text(t, style = MaterialTheme.typography.bodySmall, color = if (alarm) status.bad else MaterialTheme.colorScheme.onSurface) }
+                if (held != null) Text(trust.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        // Замена файла карты (новый регион или обновление) — редкое действие, кнопка в углу.
-        Column(Modifier.align(Alignment.BottomStart).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            SmallFloatingActionButton(onClick = { terrainPicker.launch(arrayOf("*/*")) }) {
-                Text(stringResource(if (terrain is TerrainState.Ready) R.string.map_terrain_reimport else R.string.map_terrain_import), Modifier.padding(8.dp))
-            }
-            SmallFloatingActionButton(onClick = { roadPicker.launch(arrayOf("*/*")) }) {
-                Text(stringResource(if (roadGraph is RoadGraphState.Ready) R.string.map_roads_reimport else R.string.map_roads_import), Modifier.padding(8.dp))
-            }
-            SmallFloatingActionButton(onClick = onReimport) {
-                Text(stringResource(R.string.map_reimport), Modifier.padding(8.dp))
-            }
-        }
+    }
+}
+
+@Composable
+private fun Chip(text: String, color: Color?) {
+    val c = color ?: MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(shape = CircleShape, color = c.copy(alpha = 0.14f), border = BorderStroke(1.dp, c.copy(alpha = 0.6f))) {
+        Text(text, Modifier.padding(horizontal = 8.dp, vertical = 2.dp), style = MaterialTheme.typography.labelMedium, color = c)
     }
 }
 
@@ -358,3 +594,7 @@ private fun MapViewLifecycle(mapView: MapView) {
 
 private val MOSCOW = GeoPoint(55.7558, 37.6173)
 private const val EASE_MILLIS = 800
+/** Шаг слежения камеры: точка и поворот обновляются вместе, плавно. */
+private const val FOLLOW_STEP_MILLIS = 400
+/** Ниже этой скорости курс движения шумит — поворачиваем по компасу. */
+private const val COURSE_MIN_SPEED_MPS = 2.0

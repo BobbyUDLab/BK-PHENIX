@@ -8,7 +8,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import ru.bkphenix.app.data.EpochDiagnostics
+import ru.bkphenix.app.data.NavigationStats
 import ru.bkphenix.app.data.PhenixRepository
+import ru.bkphenix.app.data.model.MeasurementSummary
+import ru.bkphenix.core.PhenixSolution
+import ru.bkphenix.core.roads.MatchResult
+import ru.bkphenix.core.terrain.VerticalCheck
 import ru.bkphenix.app.data.log.RawLogState
 import ru.bkphenix.app.data.model.BleSnapshot
 import ru.bkphenix.app.data.model.CellSnapshot
@@ -40,6 +46,14 @@ class DiagnosticsViewModel(private val repository: PhenixRepository) : ViewModel
     fun toggleLog() = if (repository.logState.value.recording) repository.stopLog() else repository.startLog()
 
     fun deleteLogs() = repository.deleteLogs()
+
+    /** Решение ядра и внутренности эпохи — для подробных разделов. */
+    val solution: StateFlow<PhenixSolution?> = repository.solution
+    val epoch: StateFlow<EpochDiagnostics?> = repository.diagnostics
+    val vertical: StateFlow<VerticalCheck?> = repository.verticalCheck
+    val road: StateFlow<MatchResult?> = repository.roadMatch
+    val measurements: StateFlow<MeasurementSummary?> = repository.measurements
+    val navigation: StateFlow<NavigationStats> = repository.navigation
 
     /** Сколько сот своя обучаемая база уже знает надёжно. */
     val learnedCells: StateFlow<Int> = repository.learnedCellCount

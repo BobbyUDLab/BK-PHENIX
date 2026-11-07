@@ -32,6 +32,8 @@ import kotlin.math.abs
 import ru.bkphenix.app.data.model.SensorSnapshot
 import ru.bkphenix.core.inertial.DeadReckoningSource
 import ru.bkphenix.core.terrain.GrossAltitudeVeto
+import ru.bkphenix.core.integrity.MotionConsistencyMonitor
+import ru.bkphenix.core.model.PositionSource
 import ru.bkphenix.core.inertial.InertialEstimate
 import ru.bkphenix.core.track.MotionMode
 import ru.bkphenix.app.data.model.SourceStatus
@@ -166,6 +168,8 @@ class PhenixRepository(
     /** Счисление пути по ИИБ: источник компаратора и позиция карты при пропадании ГНСС. */
     private val deadReckoning = DeadReckoningSource()
     private val altitudeVeto = GrossAltitudeVeto()
+    private val motionMonitor = MotionConsistencyMonitor()
+    private var motionVeto = false
 
     /** Режим счисления (пешком/авто); задаётся с карты. */
     var motionMode: MotionMode
@@ -363,7 +367,7 @@ class PhenixRepository(
             timeObservations = time,
             rawGnss = raw,
             navigationSubframes = subframes,
-            gnssVetoed = altitudeVeto.active,
+            gnssVetoed = altitudeVeto.active || motionVeto,
         )
         val match = matchRoad(solved)
         _roadMatch.value = match
@@ -373,7 +377,13 @@ class PhenixRepository(
         // Грубая ошибка высоты (подмена у Шереметьево: +780 м) — запрет GNSS со следующей эпохи;
         // счисление, привязанное к подменённой GNSS, сбрасывается.
         if (altitudeVeto.update(check?.residualM)) deadReckoning.resetIfUnconfirmed()
-        val extra = listOfNotNull(offRoadReport, check?.report, altitudeVeto.report()).filter { it.state != IntegrityState.OK }
+        // Движение ГНСС против датчиков (шаги, покой, поворот): подменённая точка у Шереметьево едет ~100 км/ч,
+        // а человек идёт пешком. Сверяется фикс чипа, а не итог — запрет со следующей эпохи.
+        val motion = deadReckoning.motionSummary(rt)
+        val motionCheck = motionMonitor.update(fresh.firstOrNull { it.source == PositionSource.GNSS }, motion, now)
+        if (motionCheck.veto && !motionVeto) deadReckoning.resetIfUnconfirmed()
+        motionVeto = motionCheck.veto
+        val extra = listOfNotNull(offRoadReport, check?.report, altitudeVeto.report(), motionCheck.report).filter { it.state != IntegrityState.OK }
         val solution = if (extra.isEmpty()) solved
         else solved.copy(integrity = IntegrityReport.merge(listOf(solved.integrity) + extra))
         _solution.value = solution
@@ -393,6 +403,8 @@ class PhenixRepository(
                     sensors = _sensors.value.values,
                     networkTime = networkTimeSample,
                     observations = fresh,
+                    motion = motion,
+                    gnssSpeedMps = motionCheck.gnssSpeedMps,
                 ),
             )
         }

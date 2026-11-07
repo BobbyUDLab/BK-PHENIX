@@ -60,6 +60,9 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
     private var headingAligned = false
     private var stillSamples = 0
 
+    /** Шаги, покой и поворот для сверки с ГНСС — во всех режимах, без привязки к счислению. */
+    public val sensing: MotionSensing = MotionSensing()
+
     /** Оценка смещения гироскопа, рад/с (обновляется в покое). */
     public val gyroBiasRadS: DoubleArray get() = gyroBias.copyOf()
 
@@ -90,6 +93,7 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
         }
         val gyro = DoubleArray(3) { s.gyro[it] - gyroBias[it] }
         orientation.update(gyro, s.accel, s.mag, dt)
+        sensing.onSample(s.timeNanos, s.accel, gyro, orientation.verticalRate(gyro))
         if (!filter.isInitialized) return
         val ms = s.timeNanos / NANOS_PER_MILLI
         filter.predict(ms)

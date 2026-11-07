@@ -6,6 +6,7 @@ import ru.bkphenix.app.data.model.NetworkTimeSample
 import ru.bkphenix.app.data.model.SensorSnapshot
 import ru.bkphenix.core.PhenixSolution
 import ru.bkphenix.core.geo.GeoPoint
+import ru.bkphenix.core.inertial.MotionSummary
 import ru.bkphenix.core.model.PositionObservation
 
 /** Поля записей JSONL: одна запись `epoch` в секунду с результатами ядра и окружением. */
@@ -19,6 +20,8 @@ object PhenixLogRecords {
         sensors: Collection<SensorSnapshot>,
         networkTime: NetworkTimeSample?,
         observations: List<PositionObservation> = emptyList(),
+        motion: MotionSummary? = null,
+        gnssSpeedMps: Double? = null,
     ): Map<String, Any?> = linkedMapOf(
         "point" to solution.point?.let(::point),
         "accuracyM" to solution.accuracyM,
@@ -66,6 +69,14 @@ object PhenixLogRecords {
             )
         },
         "sensors" to sensors.associate { it.kind.name to mapOf("values" to it.values, "t" to it.timeMillis) },
+        // Датчики движения против ГНСС (с 0.8): шаги за 10 с, частота и ритм, покой, поворот гироскопа за 25…5 с.
+        "motion" to motion?.let {
+            mapOf(
+                "steps10s" to it.steps, "cadenceHz" to it.cadenceHz, "stepCv" to it.stepIntervalCv,
+                "walking" to it.walking, "stationaryS" to it.stationaryS, "yawDeg" to it.yawChangeDeg,
+                "gnssSpeedMps" to gnssSpeedMps,
+            )
+        },
         "networkTime" to networkTime?.let {
             mapOf("offsetMs" to it.offsetMillis, "uncertaintyMs" to it.uncertaintyMillis, "method" to it.method)
         },

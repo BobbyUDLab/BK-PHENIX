@@ -200,7 +200,7 @@ private fun PositionHero(solution: PhenixSolution?, running: Boolean) {
     val context = LocalContext.current
     val p = solution?.point
     Card(
-        Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth(),
         onClick = {
             if (p != null) {
                 clipboard.setText(AnnotatedString("${p.latitude.fmt(6)}, ${p.longitude.fmt(6)}"))

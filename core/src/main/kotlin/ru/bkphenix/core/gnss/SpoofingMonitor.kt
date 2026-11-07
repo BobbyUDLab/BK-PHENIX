@@ -3,6 +3,7 @@ package ru.bkphenix.core.gnss
 import ru.bkphenix.core.integrity.IntegrityReport
 import ru.bkphenix.core.integrity.IntegrityState
 import ru.bkphenix.core.model.GnssBand
+import ru.bkphenix.core.model.GnssConstellation
 import ru.bkphenix.core.model.PositionObservation
 import ru.bkphenix.core.model.TimeObservation
 import ru.bkphenix.core.model.TimeSource
@@ -19,6 +20,7 @@ public enum class DetectorKind(public val displayName: String) {
     NITZ_TIME("Сверка времени с NITZ"),
     AGC("АРУ и C/N0"),
     CHIP_VS_OWN("Решение чипа против собственного"),
+    CONSTELLATION_ASYMMETRY("GPS против других систем"),
 }
 
 public enum class DetectorVerdict { PASS, ALERT, NOT_APPLICABLE }
@@ -58,6 +60,15 @@ public data class SpoofingThresholds(
     val agcBaselineEpochs: Int = 10,
     val chipGateSigma: Double = 4.0,
     val chipMinGateM: Double = 30.0,
+    /** Мин. C/N0 пригодного измерения, дБ·Гц. */
+    val asymmetryMinCn0: Double = 15.0,
+    /** Подряд эпох «GPS есть, остальные заглушены» для тревоги. */
+    val dropoutEpochs: Int = 5,
+    /** Превышение C/N0 GPS L1 над другими системами (медианы четырёх сильнейших), дБ. */
+    val cn0ExcessDb: Double = 6.0,
+    /** Тревога по превышению: не менее [cn0ExcessMinEpochs] из последних [cn0ExcessWindow] эпох. */
+    val cn0ExcessWindow: Int = 15,
+    val cn0ExcessMinEpochs: Int = 10,
 )
 
 /**
@@ -71,6 +82,8 @@ public class SpoofingMonitor(private val t: SpoofingThresholds = SpoofingThresho
     private var agcBaseline: Double? = null
     private var cn0Baseline: Double? = null
     private var baselineEpochs = 0
+    private var dropoutRun = 0
+    private val excessHistory = ArrayDeque<Boolean>()
 
     public fun evaluate(input: SpoofingInput): List<DetectorResult> = listOf(
         cn0Uniformity(input),
@@ -80,6 +93,7 @@ public class SpoofingMonitor(private val t: SpoofingThresholds = SpoofingThresho
         nitz(input),
         agc(input),
         chipVsOwn(input),
+        constellationAsymmetry(input),
     )
 
     public fun reset() {
@@ -89,6 +103,49 @@ public class SpoofingMonitor(private val t: SpoofingThresholds = SpoofingThresho
         agcBaseline = null
         cn0Baseline = null
         baselineEpochs = 0
+        dropoutRun = 0
+        excessHistory.clear()
+    }
+
+    /**
+     * Подмена только GPS при глушении остальных систем (все полевые эпизоды у Шереметьево 05–07.11.2026):
+     * - «выпадение»: GPS L1 пригоден (≥ 4 спутника), ГЛОНАСС/Galileo/BeiDou видны, но ни одного пригодного
+     *   измерения — [SpoofingThresholds.dropoutEpochs] эпох подряд (Mate 70: 90–98 % эпох подмены, 0 на чистых);
+     * - «превышение»: C/N0 GPS L1 выше других систем больше чем на [SpoofingThresholds.cn0ExcessDb] в
+     *   [SpoofingThresholds.cn0ExcessMinEpochs] из [SpoofingThresholds.cn0ExcessWindow] эпох (P30 lite: +7…8,5 дБ;
+     *   на чистых записях GPS обычно слабее — медиана −2,6…−7,5 дБ).
+     * Эфемериды, сеть и SIM не нужны — только сырые измерения.
+     */
+    internal fun constellationAsymmetry(input: SpoofingInput): DetectorResult {
+        val k = DetectorKind.CONSTELLATION_ASYMMETRY
+        val ms = input.epoch?.measurements ?: return na(k, "Нет сырых измерений")
+        val gps = ms.filter { it.sat.constellation == GnssConstellation.GPS && it.band == GnssBand.L1 }
+        val others = ms.filter { it.sat.constellation in OTHER_SYSTEMS }
+        val gpsOk = gps.filter { it.towKnown && it.cn0DbHz >= t.asymmetryMinCn0 }
+        val othersOk = others.count { it.towKnown && it.cn0DbHz >= t.asymmetryMinCn0 }
+        if (gpsOk.size < 4 || others.size < 3) {
+            dropoutRun = 0
+            return na(k, "GPS пригодных: ${gpsOk.size}, других систем видно: ${others.size}")
+        }
+        dropoutRun = if (othersOk == 0) dropoutRun + 1 else 0
+        val otherCn0 = others.map { it.cn0DbHz }.filter { it > 0 }
+        val excess = if (otherCn0.size >= 3) topMedian(gps.map { it.cn0DbHz }) - topMedian(otherCn0) else null
+        excessHistory.addLast(excess != null && excess > t.cn0ExcessDb)
+        while (excessHistory.size > t.cn0ExcessWindow) excessHistory.removeFirst()
+        val excessCount = excessHistory.count { it }
+        val detail = "GPS L1 пригодных ${gpsOk.size}; ГЛОНАСС/Galileo/BeiDou видно ${others.size}, пригодных $othersOk" +
+            (excess?.let { "; C/N0 GPS − другие %+.1f дБ".format(it) } ?: "")
+        return when {
+            dropoutRun >= t.dropoutEpochs -> alert(k, "$detail: остальные системы заглушены, работает только GPS")
+            excessCount >= t.cn0ExcessMinEpochs -> alert(k, "$detail: сигнал GPS неестественно сильнее остальных ($excessCount из ${excessHistory.size} эпох)")
+            else -> pass(k, detail)
+        }
+    }
+
+    /** Медиана четырёх сильнейших значений. */
+    private fun topMedian(values: List<Double>): Double {
+        val top = values.sortedDescending().take(4).sorted()
+        return if (top.size % 2 == 1) top[top.size / 2] else (top[top.size / 2 - 1] + top[top.size / 2]) / 2
     }
 
     /** Спуфер с одной антенны выдаёт почти равные C/N0; у реального неба разброс из-за углов места. */
@@ -267,3 +324,6 @@ public class SpoofingMonitor(private val t: SpoofingThresholds = SpoofingThresho
         )
     }
 }
+
+/** Системы, с которыми сравнивается GPS в детекторе асимметрии. */
+private val OTHER_SYSTEMS = setOf(GnssConstellation.GLONASS, GnssConstellation.GALILEO, GnssConstellation.BEIDOU)

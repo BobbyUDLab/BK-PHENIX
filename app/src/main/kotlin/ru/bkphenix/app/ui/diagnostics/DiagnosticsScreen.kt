@@ -4,6 +4,8 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -42,6 +44,14 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
     val rinex by viewModel.rinexInfo.collectAsStateWithLifecycle()
     val cellDb by viewModel.cellDatabase.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val learned by viewModel.learnedCells.collectAsStateWithLifecycle()
+    val learnedMessage by viewModel.learnedMessage.collectAsStateWithLifecycle()
+    val exportLearned = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        uri?.let { u -> viewModel.exportLearned { context.contentResolver.openOutputStream(u) } }
+    }
+    val importLearned = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let { u -> viewModel.importLearned { context.contentResolver.openInputStream(u) } }
+    }
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -93,6 +103,13 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
                     InfoRow("Регион", c.region)
                     InfoRow("Данные", c.source)
                 }
+                // Своя база: учится на надёжных эпохах, раньше офлайн-базы при поиске.
+                InfoRow("Своя база, сот", learned.toString())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { exportLearned.launch("bk-phenix-cells.bklc") }) { Text("Экспорт") }
+                    OutlinedButton(onClick = { importLearned.launch(arrayOf("*/*")) }) { Text("Импорт") }
+                }
+                learnedMessage?.let { Text(it) }
             }
         }
         item {

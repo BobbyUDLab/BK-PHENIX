@@ -119,23 +119,44 @@ internal object MapLayers {
         )
     }
 
-    fun update(style: Style, solution: PhenixSolution?, held: HeldPosition?, track: List<TrackPoint>, road: MatchResult? = null) {
+    /** Последний нарисованный трек: перестраиваем линию, только когда он изменился (0.8.1, мерцание при движении). */
+    private var drawnTrackSize = -1
+    private var drawnTrackLast: TrackPoint? = null
+    private var drawnStyle: Style? = null
+
+    /**
+     * @param showSources круги всех источников (соты на сотни метров, сеть, счисление). В 0.8 рисовались каждую секунду
+     * и прыгали при движении — главный «артефакт» на карте. С 0.8.1 по умолчанию скрыты, включаются в меню слоёв.
+     */
+    fun update(
+        style: Style,
+        solution: PhenixSolution?,
+        held: HeldPosition?,
+        track: List<TrackPoint>,
+        road: MatchResult? = null,
+        showSources: Boolean = false,
+    ) {
         style.getSourceAs<GeoJsonSource>(ROAD)?.setGeoJson(
             FeatureCollection.fromFeatures(
                 road?.matched?.let { m -> listOf(Feature.fromGeometry(LineString.fromLngLats(listOf(road.raw.toPoint(), m.toPoint()))), Feature.fromGeometry(m.toPoint())) }.orEmpty(),
             ),
         )
-        style.getSourceAs<GeoJsonSource>(TRACK)?.setGeoJson(
-            FeatureCollection.fromFeatures(
-                TrackSegments.split(track).map { seg ->
-                    Feature.fromGeometry(LineString.fromLngLats(seg.points.map { it.point.toPoint() })).apply {
-                        addBooleanProperty("coarse", seg.coarse)
-                    }
-                },
-            ),
-        )
+        if (style !== drawnStyle || track.size != drawnTrackSize || track.lastOrNull() != drawnTrackLast) {
+            style.getSourceAs<GeoJsonSource>(TRACK)?.setGeoJson(
+                FeatureCollection.fromFeatures(
+                    TrackSegments.split(track).map { seg ->
+                        Feature.fromGeometry(LineString.fromLngLats(seg.points.map { it.point.toPoint() })).apply {
+                            addBooleanProperty("coarse", seg.coarse)
+                        }
+                    },
+                ),
+            )
+            drawnStyle = style
+            drawnTrackSize = track.size
+            drawnTrackLast = track.lastOrNull()
+        }
         val sources = mutableListOf<Feature>()
-        solution?.comparison?.let { c ->
+        solution?.comparison?.takeIf { showSources }?.let { c ->
             c.accepted.forEach { sources += marker(it.point, it.accuracyM, it.source.color(), it.source.displayName, 0.08) }
             c.rejected.forEach { sources += marker(it.point, it.accuracyM, REJECTED, "${it.source.displayName} ✕", 0.05) }
         }

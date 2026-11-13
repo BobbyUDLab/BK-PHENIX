@@ -55,6 +55,9 @@ public data class SpoofingThresholds(
     val maxClockGapSeconds: Double = 5.0,
     val networkGateSigma: Double = 4.0,
     val networkMinGateM: Double = 200.0,
+    /** Предельная скорость для допуска на возраст сетевой позиции, м/с, и предельный учитываемый возраст, мс. */
+    val networkMaxSpeedMps: Double = 40.0,
+    val networkMaxAgeMillis: Long = 60_000,
     val nitzToleranceMillis: Long = 2_000,
     val agcDropDb: Double = 6.0,
     val agcBaselineEpochs: Int = 10,
@@ -245,8 +248,13 @@ public class SpoofingMonitor(private val t: SpoofingThresholds = SpoofingThresho
             else -> return na(DetectorKind.NETWORK_POSITION, "Нет решения ГНСС")
         }
         val d = point.distanceTo(net.point)
-        val gate = max(t.networkMinGateM, t.networkGateSigma * sqrt(sigma * sigma + net.accuracyM * net.accuracyM))
-        val detail = "$name в %.0f м от сети (допуск %.0f м)".format(d, gate)
+        // Сетевая позиция приходит раз в 5–20 с: в машине она отстаёт на сотни метров. В 0.8 без учёта возраста
+        // детектор давал «подмену» в 849 эпохах поездки 08.11 (12:38, 74 км/ч). Допуск растёт на 40 м/с × возраст.
+        val ref = input.chipFix?.timestampMillis ?: net.timestampMillis
+        val ageS = ((ref - net.timestampMillis).coerceIn(0, t.networkMaxAgeMillis)) / 1000.0
+        val gate = max(t.networkMinGateM, t.networkGateSigma * sqrt(sigma * sigma + net.accuracyM * net.accuracyM)) +
+            t.networkMaxSpeedMps * ageS
+        val detail = "$name в %.0f м от сети (допуск %.0f м, возраст сети %.0f с)".format(d, gate, ageS)
         return if (d > gate) alert(DetectorKind.NETWORK_POSITION, detail) else pass(DetectorKind.NETWORK_POSITION, detail)
     }
 

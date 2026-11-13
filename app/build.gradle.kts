@@ -14,8 +14,8 @@ android {
         applicationId = "ru.bkphenix"
         minSdk = 26
         targetSdk = 35
-        versionCode = 14
-        versionName = "0.8.0"
+        versionCode = 15
+        versionName = "0.8.1"
         // Нативный движок MapLibre: только ARM-телефоны, без x86, чтобы не раздувать APK.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }

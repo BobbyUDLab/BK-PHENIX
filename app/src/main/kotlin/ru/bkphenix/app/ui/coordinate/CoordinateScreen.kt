@@ -52,6 +52,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ru.bkphenix.app.R
+import ru.bkphenix.app.ui.components.AnchorPrompt
+import ru.bkphenix.app.ui.components.anchorStatusText
 import ru.bkphenix.app.data.mapping.TrustLevel
 import ru.bkphenix.app.ui.components.EmptyHint
 import ru.bkphenix.app.ui.components.InfoRow
@@ -92,6 +94,7 @@ fun CoordinateScreen(viewModel: CoordinateViewModel, locationGranted: Boolean, o
                 }
             }
         }
+        AnchorPrompt(solution?.anchor, viewModel::confirmAnchorSuggestion, viewModel::dismissAnchorSuggestion, Modifier.fillMaxWidth())
         PositionHero(solution, state.running)
         SectionCard(stringResource(R.string.section_decision)) {
             // Почему итог такой: состояние целостности, причины, кто подтвердил и кто отброшен.
@@ -238,11 +241,16 @@ private fun PositionHero(solution: PhenixSolution?, running: Boolean) {
                         Tag(stringResource(R.string.tag_sources, c.accepted.size, c.accepted.size + c.rejected.size), null)
                     }
                     solution?.anchor?.let { a ->
-                        if (a.anchor != null) Tag(
-                            stringResource(if (a.anchor!!.isAuto) R.string.tag_anchor_auto else R.string.tag_anchor) +
-                                (a.deviationM?.let { " · Δ ${it.fmt(0)} м" } ?: ""),
-                            if (a.state == AnchorState.ANCHOR_CONFLICT) Bad else Ok,
-                        )
+                        anchorStatusText(a)?.let { status ->
+                            Tag(
+                                status + (a.deviationM?.let { " · Δ ${it.fmt(0)} м" } ?: ""),
+                                when {
+                                    a.state == AnchorState.ANCHOR_CONFLICT -> Bad
+                                    a.anchor?.isAuto == true || a.freshness == ru.bkphenix.core.anchor.AnchorFreshness.MUST_UPDATE -> Warn
+                                    else -> Ok
+                                },
+                            )
+                        }
                     }
                     solution?.gnss?.raim?.horizontalProtectionLevelM?.let { Tag("HPL ${it.fmt(0)} м", null) }
                     p?.altitude?.let { Tag("h ${it.fmt(0)} м", null) }

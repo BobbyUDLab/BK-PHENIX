@@ -55,11 +55,11 @@ public class CellLocator(
     internal fun consistent(found: List<Pair<CellMeasurement, CellTowerRecord>>): List<Pair<CellMeasurement, CellTowerRecord>> {
         if (found.size <= 1) return found
         fun ok(a: CellTowerRecord, b: CellTowerRecord) =
-            a.position.distanceTo(b.position) <= a.rangeM + b.rangeM + CONSISTENCY_MARGIN_M
-        val byRange = found.sortedBy { it.second.rangeM }
+            a.position.distanceTo(b.position) <= coverageOf(a) + coverageOf(b) + CONSISTENCY_MARGIN_M
+        val byRange = found.sortedBy { coverageOf(it.second) }
         return byRange.map { seed ->
             byRange.fold(listOf(seed)) { group, c -> if (c !in group && group.all { ok(it.second, c.second) }) group + c else group }
-        }.maxWith(compareBy<List<Pair<CellMeasurement, CellTowerRecord>>> { it.size }.thenBy { g -> -g.sumOf { it.second.rangeM } })
+        }.maxWith(compareBy<List<Pair<CellMeasurement, CellTowerRecord>>> { it.size }.thenBy { g -> -g.sumOf { coverageOf(it.second) } })
     }
 
     /**
@@ -77,6 +77,13 @@ public class CellLocator(
         return t - last.second > FROZEN_MS
     }
 
+    /**
+     * Радиус соты для расчёта. Запись с радиусом в единицы метров — одно наблюдение в OpenCelliD, её положение
+     * случайно: сота одна из сот «в 2 м» стояла в другом районе, в 23 км от реального места (DOOGEE 12.11).
+     */
+    private fun coverageOf(t: CellTowerRecord): Double =
+        if (t.rangeM < SINGLE_SAMPLE_RANGE_M) SINGLE_SAMPLE_COVERAGE_M else t.rangeM.coerceIn(MIN_RANGE_M, MAX_RANGE_M)
+
     private class Obs(val e: Double, val n: Double, val range: Double?, val sigma: Double)
 
     /** Решение и его σ, метры. */
@@ -91,7 +98,7 @@ public class CellLocator(
         val obs = ArrayList<Obs>()
         for ((m, t) in found) {
             val e = east(t.position); val n = north(t.position)
-            val coverage = t.rangeM.coerceIn(MIN_RANGE_M, MAX_RANGE_M)
+            val coverage = coverageOf(t)
             // Без верхней границы: у сот с радиусом 20+ км в краудсорсинге само положение «вышки» гуляет на километры
             // (в 16 км от реального места), и сильный сигнал не должен делать σ километровой.
             val towerSigma = (coverage / 4).coerceAtLeast(50.0)
@@ -106,7 +113,7 @@ public class CellLocator(
                 else -> obs += Obs(e, n, null, coverage / 2)
             }
         }
-        val meanCoverage = found.sumOf { it.second.rangeM.coerceIn(MIN_RANGE_M, MAX_RANGE_M) } / found.size
+        val meanCoverage = found.sumOf { coverageOf(it.second) } / found.size
         obs += Obs(0.0, 0.0, null, meanCoverage)
 
         // Начальное приближение: центр, взвешенный по 1/σ² (тяготеет к ближним и точным).
@@ -153,6 +160,8 @@ public class CellLocator(
         const val EARTH_M_PER_DEG = 111_320.0
         const val MAX_ITERATIONS = 10
         const val MIN_RANGE_M = 200.0
+        const val SINGLE_SAMPLE_RANGE_M = 50.0
+        const val SINGLE_SAMPLE_COVERAGE_M = 3_000.0
         const val MAX_RANGE_M = 30_000.0
         const val CONSISTENCY_MARGIN_M = 1_000.0
         const val MAX_AGE_MS = 30_000L

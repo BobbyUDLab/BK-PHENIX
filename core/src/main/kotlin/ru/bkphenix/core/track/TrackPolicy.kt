@@ -3,7 +3,6 @@ package ru.bkphenix.core.track
 import ru.bkphenix.core.PhenixSolution
 import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.integrity.IntegrityState
-import ru.bkphenix.core.model.SourceGroup
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -37,8 +36,10 @@ public object TrackPolicy {
         solution.point ?: return TrackQuality.SKIP
         val state = solution.integrity.state
         if (state in SKIP_STATES) return TrackQuality.SKIP
-        val usesGnss = solution.comparison.accepted.any { SourceGroup.GNSS_SIGNAL in it.origin }
-        if (state == IntegrityState.SPOOFING_SUSPECTED) return if (usesGnss) TrackQuality.SKIP else TrackQuality.COARSE
+        // Подозрение на подмену — пунктир, а не разрыв (0.8.1): в 0.8 итог на ГНСС при любой тревоге выкидывался, и в
+        // машине трек рвался на минуту после каждого ложного «скачка». Подменённые точки у Шереметьево сюда не доходят:
+        // их отсекают непрерывность, запреты по высоте и движению, а одиночный выброс — сглаживатель трека.
+        if (state == IntegrityState.SPOOFING_SUSPECTED) return TrackQuality.COARSE
         val sigma = solution.accuracyM ?: return TrackQuality.COARSE
         return if (sigma > COARSE_SIGMA_M) TrackQuality.COARSE else TrackQuality.GOOD
     }

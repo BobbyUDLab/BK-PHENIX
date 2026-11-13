@@ -70,6 +70,7 @@ import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import ru.bkphenix.app.R
+import ru.bkphenix.app.ui.components.AnchorPrompt
 import ru.bkphenix.app.data.map.MapFileState
 import ru.bkphenix.app.data.roads.RoadGraphState
 import ru.bkphenix.app.data.terrain.TerrainState
@@ -181,8 +182,9 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
         }
     }
 
-    LaunchedEffect(style, solution, held, track, road) {
-        style?.let { MapLayers.update(it, solution, held, track, road.takeIf { motionMode != MotionMode.NONE }) }
+    val showSources by viewModel.showSources.collectAsStateWithLifecycle()
+    LaunchedEffect(style, solution, held, track, road, showSources) {
+        style?.let { MapLayers.update(it, solution, held, track, road.takeIf { motionMode != MotionMode.NONE }, showSources) }
     }
     // «Север вверх»: поворот пальцами выключен, чтобы карта случайно не разворачивалась; «По курсу» — включён.
     LaunchedEffect(map, northUp) {
@@ -276,10 +278,19 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
                     LayerItem(R.drawable.ic_map, stringResource(R.string.map_layer_map), stringResource(R.string.map_layer_ready)) {
                         layersOpen = false; onReimport()
                     }
+                    LayerItem(
+                        R.drawable.ic_layers, stringResource(R.string.map_layer_sources),
+                        stringResource(if (showSources) R.string.map_layer_on else R.string.map_layer_off),
+                    ) { layersOpen = false; viewModel.toggleSources() }
                 }
             }
         }
 
+        // Предложение якоря на остановке — по центру снизу, над панелью скорости.
+        AnchorPrompt(
+            solution?.anchor, viewModel::confirmAnchorSuggestion, viewModel::dismissAnchorSuggestion,
+            Modifier.align(Alignment.TopCenter).padding(top = 64.dp, start = 16.dp, end = 16.dp),
+        )
         // Снизу слева — скорость, точность и сигналы целостности.
         SpeedPanel(
             Modifier.align(Alignment.BottomStart).padding(8.dp),

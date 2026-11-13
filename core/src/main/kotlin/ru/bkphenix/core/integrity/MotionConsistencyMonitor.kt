@@ -44,6 +44,9 @@ public class MotionConsistencyMonitor(
     private var vetoed = false
     private var lastReason: String? = null
 
+    /** Правило «шаги против скорости ГНСС». В машине выключается: вибрация кузова похожа на шаги. */
+    public var stepsRule: Boolean = true
+
     public fun update(gnss: PositionObservation?, motion: MotionSummary?, nowMillis: Long): MotionCheck {
         gnss?.let { g ->
             if (history.isEmpty() || g.timestampMillis > history.last().first) history.addLast(g.timestampMillis to g.point)
@@ -53,7 +56,7 @@ public class MotionConsistencyMonitor(
         if (motion == null || speed == null) return result(null, null, speed)
 
         val reason = when {
-            motion.walking && speed > maxWalkSpeedMps ->
+            stepsRule && motion.walking && speed > maxWalkSpeedMps ->
                 "ГНСС движется ${kmh(speed)} км/ч, а датчики видят шаги (${motion.steps} за 10 с) — возможна подмена ГНСС"
             motion.stationaryS >= minStillS && speed > maxStillSpeedMps ->
                 "ГНСС движется ${kmh(speed)} км/ч, а телефон неподвижен ${motion.stationaryS.roundToInt()} с — возможна подмена ГНСС"

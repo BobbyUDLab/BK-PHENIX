@@ -340,6 +340,26 @@ class PhenixRepository(
         }
     }
 
+    /** «Да» на предложение поставить якорь на остановке: точка становится ручным (доверенным) якорем. */
+    fun confirmAnchorSuggestion() {
+        scope.launch {
+            val now = clock()
+            val p = _solution.value?.anchor?.suggestion
+            if (core.anchorManager.confirmSuggestion(now)) {
+                p?.let { verticalMonitor()?.calibrateAtAnchor(it, now) }
+                solveEpoch()
+            }
+        }
+    }
+
+    /** «Позже»: предложения якоря не показываются 10 минут. */
+    fun dismissAnchorSuggestion() {
+        scope.launch {
+            core.anchorManager.dismissSuggestion(clock())
+            solveEpoch()
+        }
+    }
+
     /** Сведения о запасных эфемеридах RINEX. */
     val rinexInfo: StateFlow<RinexEphemerisInfo?> get() = rinex.info
 
@@ -407,7 +427,6 @@ class PhenixRepository(
         )
         val match = matchRoad(solved)
         _roadMatch.value = match
-        val offRoadReport = offRoad.update(match)
         val check = checkVertical(solved, now)
         _verticalCheck.value = check
         // Грубая ошибка высоты (подмена у Шереметьево: +780 м) — запрет GNSS со следующей эпохи;
@@ -416,7 +435,11 @@ class PhenixRepository(
         // Движение ГНСС против датчиков (шаги, покой, поворот): подменённая точка у Шереметьево едет ~100 км/ч,
         // а человек идёт пешком. Сверяется фикс чипа, а не итог — запрет со следующей эпохи.
         val motion = deadReckoning.motionSummary(rt)
+        // В машине вибрация похожа на шаги: правило «шаги против скорости» только пешком и без режима (0.8.1;
+        // DOOGEE 12.11 — 336 ложных запретов ГНСС в «Авто»).
+        motionMonitor.stepsRule = motionMode != MotionMode.CAR
         val motionCheck = motionMonitor.update(fresh.firstOrNull { it.source == PositionSource.GNSS }, motion, now)
+        val offRoadReport = offRoad.update(match, motionCheck.gnssSpeedMps)
         if (motionCheck.veto && !motionVeto) deadReckoning.resetIfUnconfirmed()
         motionVeto = motionCheck.veto
         val extra = listOfNotNull(offRoadReport, check?.report, altitudeVeto.report(), motionCheck.report).filter { it.state != IntegrityState.OK }

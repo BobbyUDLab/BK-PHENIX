@@ -156,7 +156,10 @@ public class PhenixCore(
         val usesAnchorFallback = est == null && anchor.anchor != null
         return PhenixSolution(
             point = if (usesAnchorFallback) anchor.propagatedPoint ?: anchor.anchor?.point else est,
-            accuracyM = if (usesAnchorFallback) anchor.propagatedSigmaM ?: anchor.anchor?.accuracyM else estAcc,
+            // Нижняя граница σ итога 2 м (R95 ≈ 5 м): «±3 м» в поле почти недостижимо (наблюдение владельца, 08.11),
+            // а слияние нескольких источников с оптимистичной σ чипа давало σ < 1 м.
+            accuracyM = (if (usesAnchorFallback) anchor.propagatedSigmaM ?: anchor.anchor?.accuracyM else estAcc)
+                ?.coerceAtLeast(MIN_REPORTED_SIGMA_M),
             integrity = integrity,
             anchor = anchor,
             comparison = comparison,
@@ -167,6 +170,7 @@ public class PhenixCore(
     private companion object {
         /** Нижняя граница σ собственного решения: модель ошибок псевдодальностей оптимистична. */
         const val MIN_WLS_SIGMA_M = 3.0
+        const val MIN_REPORTED_SIGMA_M = 2.0
         const val NETWORK_GATE_SIGMA = 4.0
         const val NETWORK_MIN_GATE_M = 1_000.0
         const val NETWORK_LAG_SPEED_MPS = 40.0

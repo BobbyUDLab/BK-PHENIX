@@ -72,6 +72,11 @@ class MapViewModel(
     val heading: StateFlow<Double?> = _heading.asStateFlow()
     val logState: StateFlow<RawLogState> = repository.logState
 
+    /** Круги источников на карте (по умолчанию скрыты — меньше мельтешения при движении). */
+    private val _showSources = MutableStateFlow(false)
+    val showSources: StateFlow<Boolean> = _showSources.asStateFlow()
+    fun toggleSources() { _showSources.value = !_showSources.value }
+
     private val _viewMode = MutableStateFlow(MapViewMode.LOCATION)
     val viewMode: StateFlow<MapViewMode> = _viewMode.asStateFlow()
 
@@ -126,6 +131,8 @@ class MapViewModel(
     fun setAnchor(point: GeoPoint) = repository.setAnchor(point, AnchorInput.DEFAULT_ACCURACY_M)
 
     fun clearAnchor() = repository.clearAnchor()
+    fun confirmAnchorSuggestion() = repository.confirmAnchorSuggestion()
+    fun dismissAnchorSuggestion() = repository.dismissAnchorSuggestion()
 
     /** Трек и полный журнал — одной кнопкой. */
     fun toggleTrack() = control.toggle()

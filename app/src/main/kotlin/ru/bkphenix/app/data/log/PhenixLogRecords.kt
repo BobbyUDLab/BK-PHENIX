@@ -43,6 +43,11 @@ object PhenixLogRecords {
             "ageS" to solution.anchor.ageSeconds,
             "traveledM" to solution.anchor.traveledM,
             "sigmaM" to solution.anchor.propagatedSigmaM,
+            // С 0.8.1: какой якорь (ручной/авто), где он и куда ушёл, предложение на остановке.
+            "mode" to solution.anchor.anchor?.mode?.name,
+            "anchorPoint" to solution.anchor.anchor?.let { point(it.point) + mapOf("sigmaM" to it.accuracyM, "t" to it.timestampMillis) },
+            "propagated" to solution.anchor.propagatedPoint?.let { point(it) },
+            "suggestion" to solution.anchor.suggestion?.let { point(it) },
         ),
         // Наблюдения источников до сравнения (включая счисление) — для повторного прогона счисления и NEES.
         "observations" to observations.map {

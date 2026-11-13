@@ -99,8 +99,12 @@ public class DeadReckoningSource(private val navigator: InertialNavigator = Iner
     public fun onSolution(solution: PhenixSolution, realtimeMillis: Long): Boolean {
         val accepted = solution.comparison.accepted
         if (accepted.isEmpty() || accepted.all { it.source == PositionSource.DEAD_RECKONING }) return false
+        // Привязка — только по точному источнику (ГНСС, Wi-Fi, якорь). Одна и та же сота раз в секунду — не
+        // независимые измерения: σ счисления «сходилась» к 2–3 м после 45 мин без ГНСС (DOOGEE 12.11, 14:00–14:45),
+        // и итог прыгал вслед за неверной вышкой на 23 км.
+        if (accepted.none { it.source != PositionSource.DEAD_RECKONING && it.accuracyM <= MAX_SEED_SIGMA_M }) return false
         val confirmed = solution.comparison.strongConfirmationsExcluding(SourceGroup.INERTIAL) >= ComparisonResult.QUORUM ||
-            accepted.any { it.source == PositionSource.LANDMARK }
+            accepted.any { it.source == PositionSource.LANDMARK && it.isIndependentEvidence }
         return onSolution(solution.point, solution.accuracyM, solution.integrity.state, realtimeMillis, confirmed)
     }
 
@@ -124,5 +128,7 @@ public class DeadReckoningSource(private val navigator: InertialNavigator = Iner
         val UNTRUSTED = setOf(IntegrityState.INCONSISTENT, IntegrityState.SPOOFING_SUSPECTED, IntegrityState.NO_DATA)
         const val DEFAULT_SIGMA_M = 20.0
         const val MIN_SEED_FIXES = 3
+        /** Точность источника, по которому счисление может привязываться, м. */
+        const val MAX_SEED_SIGMA_M = 50.0
     }
 }

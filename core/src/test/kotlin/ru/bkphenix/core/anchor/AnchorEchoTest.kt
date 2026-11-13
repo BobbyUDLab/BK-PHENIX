@@ -28,8 +28,9 @@ class AnchorEchoTest {
             val t = t0 + i * 1000L
             last = core.solve(listOf(gnss(home.offset(1.5 * i, 90.0), t)), t) // увод 1,5 м/с на восток
         }
-        // Положение по якорю осталось дома (σ выросла), а не ушло на 900 м вместе с ГНСС.
-        assertTrue(last.anchor.propagatedPoint!!.distanceTo(home) < 1.0, "якорь ушёл на ${last.anchor.propagatedPoint!!.distanceTo(home)} м")
+        // 0.8.1 (решение владельца): доверенный якорь идёт за точной ГНСС и без кворума, но не дальше 300 м —
+        // увод на 900 м не утащил его за собой.
+        assertTrue(last.anchor.propagatedPoint!!.distanceTo(home) <= AnchorManager.TRUSTED_FOLLOW_MAX_PATH_M + 1.0, "якорь ушёл на ${last.anchor.propagatedPoint!!.distanceTo(home)} м")
         assertNotEquals(PointTrustLevel.RELIABLE, PointTrust.of(last).level, "одна ГНСС + якорь-область не дают «Надёжно»")
     }
 
@@ -62,5 +63,57 @@ class AnchorEchoTest {
         assertTrue(m.observation(1_000)!!.isIndependentEvidence, "свежий якорь — голос «Человек»")
         m.evaluate(null, null, 5_000)
         assertTrue(!m.observation(5_000)!!.isIndependentEvidence, "якорь с σ в сотни метров — лишь область")
+    }
+
+    @Test
+    fun `ручной якорь голосует, автоякорь без подтверждения — нет`() {
+        val m = AnchorManager().apply { motionMode = MotionMode.WALK }
+        m.setAnchor(Anchor(home, 10.0, 0))
+        m.evaluate(home, 3.0, 1000L)
+        assertTrue(m.observation(1000L)!!.isIndependentEvidence, "ручной якорь — доверенный голос")
+        m.setAnchor(Anchor(home, 10.0, 2000L, AnchorMode.AUTOMATIC))
+        m.evaluate(home, 3.0, 3000L)
+        assertTrue(!m.observation(3000L)!!.isIndependentEvidence, "автоякорь без подтверждения — не голос")
+    }
+
+    @Test
+    fun `доверенный якорь идёт за точной ГНСС без кворума и подтверждает её`() {
+        val core = PhenixCore().apply { anchorManager.motionMode = MotionMode.WALK }
+        core.anchorManager.setAnchor(Anchor(home, 5.0, t0))
+        var last = core.solve(listOf(gnss(home, t0)), t0)
+        for (i in 1..120) {
+            val t = t0 + i * 1000L
+            last = core.solve(listOf(gnss(home.offset(1.2 * i, 0.0), t)), t) // прогулка 1,2 м/с, 144 м
+        }
+        assertTrue(last.anchor.propagatedPoint!!.distanceTo(home.offset(144.0, 0.0)) < 15.0, "якорь отстал")
+        assertEquals(2, last.comparison.strongConfirmations, "ГНСС + человек")
+    }
+
+    @Test
+    fun `на остановке предлагается подтвердить якорь, подтверждённый — ручной`() {
+        val m = AnchorManager().apply { motionMode = MotionMode.WALK }
+        m.setAnchor(Anchor(home, 10.0, 0, AnchorMode.AUTOMATIC))
+        // Автоякорь без ручного не продлевается, но предложение подтвердить его на остановке есть.
+        val stop = home.offset(50.0, 90.0)
+        var e = m.evaluate(stop, 3.0, 1000L)
+        for (i in 2..20) e = m.evaluate(stop, 3.0, i * 1000L)
+        assertTrue(e.suggestion != null, "нет предложения на остановке")
+        assertTrue(m.confirmSuggestion(21_000L))
+        assertEquals(AnchorMode.MANUAL, m.anchor?.mode)
+        assertTrue(m.isTrusted)
+        // «Позже» глушит предложения.
+        m.setAnchor(Anchor(home, 10.0, 22_000L, AnchorMode.AUTOMATIC))
+        m.dismissSuggestion(22_000L)
+        for (i in 23..60) e = m.evaluate(stop, 3.0, i * 1000L)
+        assertEquals(null, e.suggestion)
+    }
+
+    @Test
+    fun `при подозрении на подмену предложения нет`() {
+        val m = AnchorManager().apply { motionMode = MotionMode.WALK }
+        m.setAnchor(Anchor(home, 10.0, 0, AnchorMode.AUTOMATIC))
+        var e = m.evaluate(home, 3.0, 1000L, spoofSuspected = true)
+        for (i in 2..30) e = m.evaluate(home, 3.0, i * 1000L, spoofSuspected = true)
+        assertEquals(null, e.suggestion)
     }
 }

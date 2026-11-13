@@ -48,12 +48,21 @@ class AutoAnchorDrive2Test {
     }
 
     @Test
-    fun `в режиме Пешком автоякоря нет`() {
-        val m = AnchorManager()
-        val p = GeoPoint(55.75, 37.6)
-        m.setAnchor(Anchor(p, 10.0, 0))
-        for (i in 1..400) m.evaluate(p, 3.0, i * 1000L, sourcesHaveQuorum = true)
-        assertEquals(AnchorMode.MANUAL, m.anchor?.mode)
+    fun `автоякорь работает во всех режимах, но только после ручного`() {
+        for (mode in MotionMode.entries) {
+            val m = AnchorManager().apply { motionMode = mode }
+            val p = GeoPoint(55.75, 37.6)
+            for (i in 1..400) m.evaluate(p, 3.0, i * 1000L, sourcesHaveQuorum = true)
+            assertEquals(null, m.anchor, "$mode: без ручного якоря автоякоря нет")
+            m.setAnchor(Anchor(p, 10.0, 400_000))
+            for (i in 401..800) m.evaluate(p, 3.0, i * 1000L, sourcesHaveQuorum = true)
+            // 0.8.1: свежий ручной (доверенный) якорь слабым автоякорем не заменяется.
+            assertEquals(AnchorMode.MANUAL, m.anchor?.mode, "$mode: свежий ручной якорь")
+            // Устаревший окончательно (2 ч) — заменяется.
+            for (i in 801..7700) m.evaluate(p, 3.0, i * 1000L, sourcesHaveQuorum = true)
+            assertEquals(AnchorMode.AUTOMATIC, m.anchor?.mode, "$mode")
+            assertEquals(AnchorMode.MANUAL, m.lastHumanAnchor?.mode, "$mode")
+        }
     }
 
     @Test
@@ -63,7 +72,7 @@ class AutoAnchorDrive2Test {
         m.setAnchor(Anchor(p, 10.0, 0))
         for (i in 1..400) m.evaluate(p, 3.0, i * 1000L, sourcesHaveQuorum = true, spoofSuspected = true)
         assertEquals(AnchorMode.MANUAL, m.anchor?.mode)
-        for (i in 401..800) m.evaluate(p, 3.0, i * 1000L, sourcesHaveQuorum = true)
+        for (i in 401..7700) m.evaluate(p, 3.0, i * 1000L, sourcesHaveQuorum = true)
         assertEquals(AnchorMode.AUTOMATIC, m.anchor?.mode)
     }
 }

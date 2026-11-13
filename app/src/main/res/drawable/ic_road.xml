@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Дорога -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FF000000" android:pathData="M3.5,21L9.5,3H11L6.2,21ZM20.5,21L14.5,3H13L17.8,21ZM11.25,5h1.5v3.5h-1.5zM11.25,10.5h1.5v3.5h-1.5zM11.25,16h1.5v5h-1.5z" />
+</vector>

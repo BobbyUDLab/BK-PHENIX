@@ -24,6 +24,7 @@ import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.model.PositionSource
 import ru.bkphenix.core.track.HeldPosition
 import ru.bkphenix.core.track.TrackPoint
+import ru.bkphenix.core.track.TrackSegments
 import ru.bkphenix.core.roads.MatchResult
 
 /** Слои приложения поверх базовой карты: трек, источники, якорь, позиция с кругом ошибки. */
@@ -40,12 +41,23 @@ internal object MapLayers {
     fun install(style: Style, oled: Boolean = false) {
         dark = oled
         listOf(TRACK, SOURCES, ANCHOR, ROAD, POSITION).forEach { style.addSource(GeoJsonSource(it)) }
+        // Трек — отрезками: сплошная линия — обычные точки, пунктир — грубые (сеть, счисление, якорь при подмене).
+        val trackColor = if (oled) PhenixPalette.hex(PhenixPalette.ORANGE) else "#E0457B"
         style.addLayer(
-            LineLayer(TRACK, TRACK).withProperties(
-                PropertyFactory.lineColor(if (oled) PhenixPalette.hex(PhenixPalette.ORANGE) else "#E0457B"),
+            LineLayer(TRACK, TRACK).withFilter(Expression.eq(Expression.get("coarse"), false)).withProperties(
+                PropertyFactory.lineColor(trackColor),
                 PropertyFactory.lineWidth(4f),
                 PropertyFactory.lineOpacity(0.85f),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+                PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+            ),
+        )
+        style.addLayer(
+            LineLayer("$TRACK-coarse", TRACK).withFilter(Expression.eq(Expression.get("coarse"), true)).withProperties(
+                PropertyFactory.lineColor(trackColor),
+                PropertyFactory.lineWidth(3f),
+                PropertyFactory.lineOpacity(0.6f),
+                PropertyFactory.lineDasharray(arrayOf(1.5f, 1.5f)),
                 PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
             ),
         )
@@ -107,18 +119,44 @@ internal object MapLayers {
         )
     }
 
-    fun update(style: Style, solution: PhenixSolution?, held: HeldPosition?, track: List<TrackPoint>, road: MatchResult? = null) {
+    /** Последний нарисованный трек: перестраиваем линию, только когда он изменился (0.8.1, мерцание при движении). */
+    private var drawnTrackSize = -1
+    private var drawnTrackLast: TrackPoint? = null
+    private var drawnStyle: Style? = null
+
+    /**
+     * @param showSources круги всех источников (соты на сотни метров, сеть, счисление). В 0.8 рисовались каждую секунду
+     * и прыгали при движении — главный «артефакт» на карте. С 0.8.1 по умолчанию скрыты, включаются в меню слоёв.
+     */
+    fun update(
+        style: Style,
+        solution: PhenixSolution?,
+        held: HeldPosition?,
+        track: List<TrackPoint>,
+        road: MatchResult? = null,
+        showSources: Boolean = false,
+    ) {
         style.getSourceAs<GeoJsonSource>(ROAD)?.setGeoJson(
             FeatureCollection.fromFeatures(
                 road?.matched?.let { m -> listOf(Feature.fromGeometry(LineString.fromLngLats(listOf(road.raw.toPoint(), m.toPoint()))), Feature.fromGeometry(m.toPoint())) }.orEmpty(),
             ),
         )
-        style.getSourceAs<GeoJsonSource>(TRACK)?.setGeoJson(
-            if (track.size < 2) FeatureCollection.fromFeatures(emptyList())
-            else FeatureCollection.fromFeature(Feature.fromGeometry(LineString.fromLngLats(track.map { it.point.toPoint() }))),
-        )
+        if (style !== drawnStyle || track.size != drawnTrackSize || track.lastOrNull() != drawnTrackLast) {
+            style.getSourceAs<GeoJsonSource>(TRACK)?.setGeoJson(
+                FeatureCollection.fromFeatures(
+                    TrackSegments.split(track).map { seg ->
+                        Feature.fromGeometry(LineString.fromLngLats(seg.points.map { it.point.toPoint() })).apply {
+                            addBooleanProperty("coarse", seg.coarse)
+                        }
+                    },
+                ),
+            )
+            drawnStyle = style
+            drawnTrackSize = track.size
+            drawnTrackLast = track.lastOrNull()
+        }
         val sources = mutableListOf<Feature>()
-        solution?.comparison?.let { c ->
+        solution?.comparison?.takeIf { showSources }?.let { c ->
             c.accepted.forEach { sources += marker(it.point, it.accuracyM, it.source.color(), it.source.displayName, 0.08) }
             c.rejected.forEach { sources += marker(it.point, it.accuracyM, REJECTED, "${it.source.displayName} ✕", 0.05) }
         }

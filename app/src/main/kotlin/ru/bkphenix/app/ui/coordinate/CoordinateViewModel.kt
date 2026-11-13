@@ -43,4 +43,6 @@ class CoordinateViewModel(private val repository: PhenixRepository) : ViewModel(
         }
 
     fun clearAnchor() = repository.clearAnchor()
+    fun confirmAnchorSuggestion() = repository.confirmAnchorSuggestion()
+    fun dismissAnchorSuggestion() = repository.dismissAnchorSuggestion()
 }

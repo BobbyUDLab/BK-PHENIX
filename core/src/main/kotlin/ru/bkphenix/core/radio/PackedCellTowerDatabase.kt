@@ -19,13 +19,22 @@ public class PackedCellTowerDatabase private constructor(
     override fun find(measurement: CellMeasurement): CellTowerRecord? {
         if (measurement.mcc != MCC_RUSSIA) return null
         val key = CellKey.of(measurement) ?: return null
-        val i = keys.binarySearch(key)
-        if (i < 0) return null
+        var i = keys.binarySearch(key)
+        var site = false
+        if (i < 0) {
+            // Точной соты нет — базовая станция LTE (eNB) с бо́льшим радиусом: позиция станции по известным
+            // сотам. Полевые записи 04–07.11.2026: точных сот 22 из 156, по станции — 82, медиана 375 м.
+            val sk = CellKey.siteOf(measurement) ?: return null
+            i = keys.binarySearch(sk)
+            if (i < 0) return null
+            site = true
+        }
+        val r = if (range[i] > 0) range[i].toDouble() else UNKNOWN_RANGE_M
         return CellTowerRecord(
             measurement.technology, measurement.mcc, measurement.mnc ?: return null,
             measurement.areaCode ?: 0, measurement.cellId ?: return null,
             GeoPoint(lat[i] / 1e6, lon[i] / 1e6),
-            if (range[i] > 0) range[i].toDouble() else UNKNOWN_RANGE_M,
+            if (site) maxOf(r, SITE_MIN_RANGE_M) else r,
         )
     }
 
@@ -35,6 +44,9 @@ public class PackedCellTowerDatabase private constructor(
 
         /** Радиус соты, если в выгрузке его нет (одно наблюдение). */
         public const val UNKNOWN_RANGE_M: Double = 1_000.0
+
+        /** Минимальный радиус записи базовой станции (eNB), м: точная сота неизвестна. */
+        public const val SITE_MIN_RANGE_M: Double = 2_000.0
 
         public fun read(input: InputStream): PackedCellTowerDatabase {
             val data = DataInputStream(input.buffered())
@@ -70,5 +82,16 @@ public object CellKey {
             CellTechnology.NR -> 3L to (cid and 0xFFFFFFFFF)
         }
         return (tech shl 51) or (mnc.toLong() shl ID_BITS) or (ident and ID_MASK)
+    }
+
+    /** Признак записи базовой станции LTE в идентификаторе (бит 43; ECI занимает 28 бит). */
+    public const val SITE_BIT: Long = 1L shl 43
+
+    /** Ключ базовой станции LTE (eNB = ECI >> 8) или null для других технологий. */
+    public fun siteOf(m: CellMeasurement): Long? {
+        if (m.technology != CellTechnology.LTE) return null
+        val mnc = m.mnc?.takeIf { it in 0..127 } ?: return null
+        val cid = m.cellId?.takeIf { it > 0 } ?: return null
+        return (2L shl 51) or (mnc.toLong() shl ID_BITS) or SITE_BIT or ((cid and 0xFFFFFFF) shr 8)
     }
 }

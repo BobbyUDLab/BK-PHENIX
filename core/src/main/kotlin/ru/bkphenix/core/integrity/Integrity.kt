@@ -2,6 +2,7 @@ package ru.bkphenix.core.integrity
 
 import ru.bkphenix.core.compare.ComparisonResult
 import ru.bkphenix.core.model.PositionObservation
+import ru.bkphenix.core.model.PositionSource
 import ru.bkphenix.core.model.SourceGroup
 import ru.bkphenix.core.model.TimeObservation
 import ru.bkphenix.core.model.TimeSource
@@ -70,7 +71,12 @@ public class ConsistencyIntegrityEngine : IntegrityEngine {
                 listOf("Решения ГНСС расходятся между собой: " + rejectedGnss.joinToString { it.source.displayName }),
             )
         }
-        val others = context.comparison.rejected.filterNot { it.source.isSatellite }
+        // «Несогласованно» — только когда отсеян самостоятельный свидетель (соты, Wi-Fi, ориентир, якорь).
+        // Счисление дрейфует по модели, а сеть платформы запаздывает и повторяет ГНСС: их отсев — норма, а не
+        // противоречие. В 0.8 он давал INCONSISTENT в 1849 из 2271 эпох обычной поездки (08.11, 00:37).
+        val others = context.comparison.rejected.filter {
+            !it.source.isSatellite && it.isGnssIndependent && it.source != PositionSource.DEAD_RECKONING
+        }
         if (others.isNotEmpty()) {
             reports += IntegrityReport(
                 IntegrityState.INCONSISTENT,

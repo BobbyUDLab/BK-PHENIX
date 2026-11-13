@@ -2,11 +2,19 @@ package ru.bkphenix.app.ui.diagnostics
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import ru.bkphenix.app.data.EpochDiagnostics
+import ru.bkphenix.app.data.NavigationStats
 import ru.bkphenix.app.data.PhenixRepository
+import ru.bkphenix.app.data.model.MeasurementSummary
+import ru.bkphenix.core.PhenixSolution
+import ru.bkphenix.core.roads.MatchResult
+import ru.bkphenix.core.terrain.VerticalCheck
 import ru.bkphenix.app.data.log.RawLogState
 import ru.bkphenix.app.data.model.BleSnapshot
 import ru.bkphenix.app.data.model.CellSnapshot
@@ -17,6 +25,8 @@ import ru.bkphenix.app.data.model.SensorSnapshot
 import ru.bkphenix.app.data.model.SourceStatus
 import ru.bkphenix.app.data.model.WifiSnapshot
 import ru.bkphenix.app.data.source.RinexEphemerisInfo
+import java.io.InputStream
+import java.io.OutputStream
 
 data class DiagnosticsUiState(
     val statuses: Map<String, SourceStatus> = emptyMap(),
@@ -36,6 +46,37 @@ class DiagnosticsViewModel(private val repository: PhenixRepository) : ViewModel
     fun toggleLog() = if (repository.logState.value.recording) repository.stopLog() else repository.startLog()
 
     fun deleteLogs() = repository.deleteLogs()
+
+    /** Решение ядра и внутренности эпохи — для подробных разделов. */
+    val solution: StateFlow<PhenixSolution?> = repository.solution
+    val epoch: StateFlow<EpochDiagnostics?> = repository.diagnostics
+    val vertical: StateFlow<VerticalCheck?> = repository.verticalCheck
+    val road: StateFlow<MatchResult?> = repository.roadMatch
+    val measurements: StateFlow<MeasurementSummary?> = repository.measurements
+    val navigation: StateFlow<NavigationStats> = repository.navigation
+
+    /** Сколько сот своя обучаемая база уже знает надёжно. */
+    val learnedCells: StateFlow<Int> = repository.learnedCellCount
+    private val _learnedMessage = MutableStateFlow<String?>(null)
+    val learnedMessage: StateFlow<String?> = _learnedMessage
+
+    fun exportLearned(open: () -> OutputStream?) {
+        viewModelScope.launch {
+            _learnedMessage.value = runCatching {
+                (open() ?: error("файл не открылся")).use { repository.exportLearnedCells(it) }
+                "Своя база сохранена"
+            }.getOrElse { "Не сохранено: ${it.message}" }
+        }
+    }
+
+    fun importLearned(open: () -> InputStream?) {
+        viewModelScope.launch {
+            _learnedMessage.value = runCatching {
+                val n = (open() ?: error("файл не открылся")).use { repository.importLearnedCells(it) }
+                "Добавлено записей: $n"
+            }.getOrElse { "Не импортировано: ${it.message}" }
+        }
+    }
 
     private val statusFlow = repository.statusFlows.let { flows ->
         combine(flows.values) { values -> flows.keys.zip(values).toMap() }

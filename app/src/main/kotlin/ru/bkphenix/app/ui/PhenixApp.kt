@@ -69,7 +69,8 @@ fun PhenixApp() {
     val current = Destination.entries.firstOrNull { it.route == backStack?.destination?.route } ?: Destination.COORDINATE
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text(stringResource(current.titleRes)) }) },
+        // На карте заголовка нет — больше места под карту; экран и так понятен по нижней панели.
+        topBar = { if (current != Destination.MAP) TopAppBar(title = { Text(stringResource(current.titleRes)) }) },
         bottomBar = {
             NavigationBar {
                 Destination.entries.forEach { d ->

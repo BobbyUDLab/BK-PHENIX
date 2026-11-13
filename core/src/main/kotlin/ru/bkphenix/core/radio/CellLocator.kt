@@ -22,7 +22,7 @@ import kotlin.math.sqrt
  *   в зеркальную точку и делает задачу определённой при одной дальности).
  *
  * Координаты вышек в краудсорсинговых базах — центры наблюдений, а не антенны, поэтому к σ каждой
- * дальности добавляется погрешность положения вышки (четверть радиуса соты, 50–1000 м).
+ * дальности добавляется погрешность положения вышки (четверть радиуса соты, не меньше 50 м).
  * Итоговая σ — корень наибольшего собственного числа ковариации, умноженный на √(χ²/ст.св.), если
  * невязки больше ожидаемых.
  */
@@ -30,10 +30,14 @@ public class CellLocator(
     private val database: CellTowerDatabase,
     private val minAccuracyM: Double = 50.0,
 ) {
+    private val lastSignal = HashMap<Triple<CellTechnology, Int?, Long>, Pair<Int, Long>>()
+
     public fun locate(measurements: List<CellMeasurement>, timestampMillis: Long): PositionObservation? {
-        val found = measurements.mapNotNull { m -> database.find(m)?.let { m to it } }
+        val fresh = measurements.filter { m -> (m.ageMillis ?: 0) <= MAX_AGE_MS && !frozen(m, timestampMillis) }
+        val all = fresh.mapNotNull { m -> database.find(m)?.let { m to it } }
             .distinctBy { (_, t) -> Triple(t.technology, t.areaCode, t.cellId) }
-        if (found.isEmpty()) return null
+        if (all.isEmpty()) return null
+        val found = consistent(all)
         val solution = solve(found) ?: return null
         return PositionObservation(
             source = PositionSource.CELL,
@@ -42,6 +46,43 @@ public class CellLocator(
             timestampMillis = timestampMillis,
         )
     }
+
+    /**
+     * Самая большая группа вышек, совместимых друг с другом (расстояние ≤ сумма радиусов + [CONSISTENCY_MARGIN_M]);
+     * при равенстве — с меньшими радиусами. Полевые записи 05.11.2026: вторая SIM  отдавала одну и ту же
+     * соту с записью в 38 км, а LTE первой SIM — в 50–330 м от реальной точки; без отсева позиция уходила на 17–40 км.
+     */
+    internal fun consistent(found: List<Pair<CellMeasurement, CellTowerRecord>>): List<Pair<CellMeasurement, CellTowerRecord>> {
+        if (found.size <= 1) return found
+        fun ok(a: CellTowerRecord, b: CellTowerRecord) =
+            a.position.distanceTo(b.position) <= coverageOf(a) + coverageOf(b) + CONSISTENCY_MARGIN_M
+        val byRange = found.sortedBy { coverageOf(it.second) }
+        return byRange.map { seed ->
+            byRange.fold(listOf(seed)) { group, c -> if (c !in group && group.all { ok(it.second, c.second) }) group + c else group }
+        }.maxWith(compareBy<List<Pair<CellMeasurement, CellTowerRecord>>> { it.size }.thenBy { g -> -g.sumOf { coverageOf(it.second) } })
+    }
+
+    /**
+     * Обслуживающая сота, у которой мощность не меняется дольше [FROZEN_MS], — устаревший кэш модема.
+     * Так ведёт себя вторая SIM в режиме ожидания: 19.05 у DSDS-телефона сота второй SIM-карты держала −85 дБм весь выход,
+     * хотя телефон прошёл 5 км. Живой сигнал гуляет на 1–3 дБ каждые несколько секунд.
+     */
+    private fun frozen(m: CellMeasurement, t: Long): Boolean {
+        val id = m.cellId ?: return false
+        val p = m.rsrpDbm ?: return false
+        if (!m.isServing) return false
+        val key = Triple(m.technology, m.mnc, id)
+        val last = lastSignal[key]
+        if (last == null || last.first != p || t < last.second) { lastSignal[key] = p to t; return false }
+        return t - last.second > FROZEN_MS
+    }
+
+    /**
+     * Радиус соты для расчёта. Запись с радиусом в единицы метров — одно наблюдение в OpenCelliD, её положение
+     * случайно: сота одна из сот «в 2 м» стояла в другом районе, в 23 км от реального места (DOOGEE 12.11).
+     */
+    private fun coverageOf(t: CellTowerRecord): Double =
+        if (t.rangeM < SINGLE_SAMPLE_RANGE_M) SINGLE_SAMPLE_COVERAGE_M else t.rangeM.coerceIn(MIN_RANGE_M, MAX_RANGE_M)
 
     private class Obs(val e: Double, val n: Double, val range: Double?, val sigma: Double)
 
@@ -57,8 +98,10 @@ public class CellLocator(
         val obs = ArrayList<Obs>()
         for ((m, t) in found) {
             val e = east(t.position); val n = north(t.position)
-            val coverage = t.rangeM.coerceIn(MIN_RANGE_M, MAX_RANGE_M)
-            val towerSigma = (coverage / 4).coerceIn(50.0, 1_000.0)
+            val coverage = coverageOf(t)
+            // Без верхней границы: у сот с радиусом 20+ км в краудсорсинге само положение «вышки» гуляет на километры
+            // (в 16 км от реального места), и сильный сигнал не должен делать σ километровой.
+            val towerSigma = (coverage / 4).coerceAtLeast(50.0)
             val ta = if (m.isServing) m.timingAdvance?.let { taRange(m.technology, it) } else null
             val rssi = m.rsrpDbm
             when {
@@ -70,7 +113,7 @@ public class CellLocator(
                 else -> obs += Obs(e, n, null, coverage / 2)
             }
         }
-        val meanCoverage = found.sumOf { it.second.rangeM.coerceIn(MIN_RANGE_M, MAX_RANGE_M) } / found.size
+        val meanCoverage = found.sumOf { coverageOf(it.second) } / found.size
         obs += Obs(0.0, 0.0, null, meanCoverage)
 
         // Начальное приближение: центр, взвешенный по 1/σ² (тяготеет к ближним и точным).
@@ -117,7 +160,12 @@ public class CellLocator(
         const val EARTH_M_PER_DEG = 111_320.0
         const val MAX_ITERATIONS = 10
         const val MIN_RANGE_M = 200.0
+        const val SINGLE_SAMPLE_RANGE_M = 50.0
+        const val SINGLE_SAMPLE_COVERAGE_M = 3_000.0
         const val MAX_RANGE_M = 30_000.0
+        const val CONSISTENCY_MARGIN_M = 1_000.0
+        const val MAX_AGE_MS = 30_000L
+        const val FROZEN_MS = 60_000L
         const val MIN_PATH_M = 30.0
         const val PATH_LOSS_SIGMA_FRACTION = 0.6
 

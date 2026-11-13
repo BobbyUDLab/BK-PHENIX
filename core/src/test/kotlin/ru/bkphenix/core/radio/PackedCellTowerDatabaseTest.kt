@@ -50,6 +50,25 @@ class PackedCellTowerDatabaseTest {
     }
 
     @Test
+    fun `неизвестная сота находится по станции LTE с радиусом не меньше 2 км`() {
+        val known = m(CellTechnology.LTE, 2, 9742, 25_822_124)
+        val sibling = m(CellTechnology.LTE, 2, 9742, (25_822_124L and 0xFFFFF00L) or 0x05L)
+        // Ключ станции считает build_cell_db.py: site_key(mnc, eci).
+        val site = (2L shl 51) or (2L shl 44) or CellKey.SITE_BIT or (25_822_124L shr 8)
+        assertEquals(site, CellKey.siteOf(sibling))
+        val db = PackedCellTowerDatabase.read(ByteArrayInputStream(bytes(listOf(
+            Triple(CellKey.of(known)!!, 55.7512 to 37.6184, 300),
+            Triple(site, 55.7522 to 37.6194, 900),
+        ))))
+        assertEquals(300.0, db.find(known)!!.rangeM)
+        val r = db.find(sibling)!!
+        assertEquals(55.7522, r.position.latitude, 1e-6)
+        assertEquals(PackedCellTowerDatabase.SITE_MIN_RANGE_M, r.rangeM)
+        assertNull(db.find(m(CellTechnology.LTE, 2, 9742, 99_999_999)))
+        assertNull(CellKey.siteOf(m(CellTechnology.WCDMA, 2, 9742, 25_822_124)))
+    }
+
+    @Test
     fun `повреждённая база отвергается`() {
         val k = CellKey.of(m(CellTechnology.LTE, 1, 1, 1))!!
         assertThrows<IllegalArgumentException> {

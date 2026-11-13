@@ -60,6 +60,9 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
     private var headingAligned = false
     private var stillSamples = 0
 
+    /** Шаги, покой и поворот для сверки с ГНСС — во всех режимах, без привязки к счислению. */
+    public val sensing: MotionSensing = MotionSensing()
+
     /** Оценка смещения гироскопа, рад/с (обновляется в покое). */
     public val gyroBiasRadS: DoubleArray get() = gyroBias.copyOf()
 
@@ -74,6 +77,9 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
 
     /** Истинный курс оси y телефона, градусы от севера. */
     public val headingDeg: Double get() = normalizeDeg(orientation.headingDeg + declinationDeg)
+
+    /** Курс по компасу (верх телефона) или null, если магнитометра ещё не было — тогда курс только по гироскопу. */
+    public val compassHeadingDeg: Double? get() = if (magSeen) headingDeg else null
 
     public fun onImu(s: ImuSample) {
         val prev = lastImuNanos
@@ -90,6 +96,7 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
         }
         val gyro = DoubleArray(3) { s.gyro[it] - gyroBias[it] }
         orientation.update(gyro, s.accel, s.mag, dt)
+        sensing.onSample(s.timeNanos, s.accel, gyro, orientation.verticalRate(gyro))
         if (!filter.isInitialized) return
         val ms = s.timeNanos / NANOS_PER_MILLI
         filter.predict(ms)

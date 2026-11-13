@@ -12,8 +12,13 @@ import kotlin.math.roundToInt
 public class OffRoadMonitor(private val consecutive: Int = CONSECUTIVE) {
     private var count = 0
 
-    public fun update(result: MatchResult?): IntegrityReport {
+    /**
+     * @param speedMps скорость ГНСС: медленно (дворы, парковки, стоянка) «вне дорог» не считается — там графа
+     * часто нет. Ночная поездка 08.11: 2934 эпохи «вне дорог» на медиане 4 км/ч.
+     */
+    public fun update(result: MatchResult?, speedMps: Double? = null): IntegrityReport {
         if (result == null || result.offRoadThresholdM == Double.MAX_VALUE) { count = 0; return IntegrityReport.OK }
+        if (speedMps != null && speedMps < MIN_SPEED_MPS) { count = 0; return IntegrityReport.OK }
         count = if (result.offRoad) count + 1 else 0
         if (count < consecutive) return IntegrityReport.OK
         val d = result.distanceToRoadM
@@ -28,5 +33,7 @@ public class OffRoadMonitor(private val consecutive: Int = CONSECUTIVE) {
 
     public companion object {
         public const val CONSECUTIVE: Int = 3
+        /** Ниже этой скорости (18 км/ч) проверка не ведётся. */
+        public const val MIN_SPEED_MPS: Double = 5.0
     }
 }

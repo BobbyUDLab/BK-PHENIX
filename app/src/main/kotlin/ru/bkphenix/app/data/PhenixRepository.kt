@@ -29,8 +29,12 @@ import ru.bkphenix.app.data.model.NetworkTimeSample
 import ru.bkphenix.app.data.model.SensorKind
 import ru.bkphenix.app.data.model.RawLocation
 import kotlin.math.abs
+import kotlinx.coroutines.withContext
 import ru.bkphenix.app.data.model.SensorSnapshot
 import ru.bkphenix.core.inertial.DeadReckoningSource
+import ru.bkphenix.core.terrain.GrossAltitudeVeto
+import ru.bkphenix.core.integrity.MotionConsistencyMonitor
+import ru.bkphenix.core.model.PositionSource
 import ru.bkphenix.core.inertial.InertialEstimate
 import ru.bkphenix.core.track.MotionMode
 import ru.bkphenix.app.data.model.SourceStatus
@@ -53,10 +57,7 @@ import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.gnss.NavigationSubframe
 import ru.bkphenix.core.gnss.Pseudoranges
 import ru.bkphenix.core.gnss.RawGnssEpoch
-import ru.bkphenix.core.compare.ComparisonResult
-import ru.bkphenix.core.model.PositionSource
 import ru.bkphenix.core.model.SatelliteStatus
-import ru.bkphenix.core.model.SourceGroup
 import ru.bkphenix.core.model.TimeObservation
 import ru.bkphenix.core.model.TimeSource
 import ru.bkphenix.app.data.roads.RoadGraphStore
@@ -76,6 +77,24 @@ import ru.bkphenix.core.radio.CellTowerDatabase
 import ru.bkphenix.app.data.cells.AssetCellTowerDatabase
 import ru.bkphenix.app.data.cells.CellDatabaseInfo
 import ru.bkphenix.core.radio.EmptyCellTowerDatabase
+import ru.bkphenix.core.radio.LearnedCellDatabase
+
+/** Внутренности эпохи для «Диагностики» и журнала: запреты, датчики, счисление, вышки. */
+data class EpochDiagnostics(
+    val timeMillis: Long,
+    val motionMode: MotionMode,
+    val altitudeVeto: Boolean,
+    val motionVeto: Boolean,
+    val motionReasons: List<String>,
+    val motion: ru.bkphenix.core.inertial.MotionSummary?,
+    val gnssSpeedMps: Double?,
+    val deadReckoning: ru.bkphenix.core.inertial.InertialEstimate?,
+    val deadReckoningIndependent: Boolean,
+    val compassHeadingDeg: Double?,
+    val observations: List<ru.bkphenix.core.model.PositionObservation>,
+    val cellFix: ru.bkphenix.core.model.PositionObservation?,
+    val learnedCells: Int,
+)
 
 /** Статистика проверки чётности GPS LNAV. */
 data class NavigationStats(val words: Long = 0, val parityFailures: Long = 0)
@@ -99,6 +118,8 @@ class PhenixRepository(
     private val logRecorder: RawLogRecorder,
     private val rinex: RinexEphemerisSource,
     cellTowers: CellTowerDatabase = EmptyCellTowerDatabase,
+    /** Файл своей обучаемой базы вышек; null — база живёт только в памяти. */
+    private val learnedCellsFile: java.io.File? = null,
     /** Дорожный граф для привязки к дорогам; null — привязка выключена. */
     private val roads: RoadGraphStore? = null,
     /** Рельеф и геоид для проверки высоты ГНСС; null — проверка выключена. */
@@ -112,7 +133,14 @@ class PhenixRepository(
     private val scope = CoroutineScope(SupervisorJob() + coreDispatcher)
     private val core = PhenixCore()
     private val cellTowers = cellTowers
-    private val cellLocator = CellLocator(cellTowers)
+    /** Своя обучаемая база поверх офлайн-базы: где телефон видел соты при надёжной позиции. */
+    private val learnedCells = LearnedCellDatabase(cellTowers)
+    private val cellLocator = CellLocator(learnedCells)
+    private val _learnedCellCount = MutableStateFlow(0)
+    /** Сколько сот и станций своя база уже знает надёжно — для диагностики. */
+    val learnedCellCount: StateFlow<Int> = _learnedCellCount.asStateFlow()
+    private var learnedDirty = false
+    private var learnedSavedAt = 0L
 
     /** Офлайн-база вышек: сколько сот и откуда, или null, если не загружена. */
     val cellDatabaseInfo: StateFlow<CellDatabaseInfo?> =
@@ -131,6 +159,9 @@ class PhenixRepository(
     private var vertical: Pair<TerrainModel, VerticalIntegrityMonitor>? = null
     private var lastGps: RawLocation? = null
     private val _verticalCheck = MutableStateFlow<VerticalCheck?>(null)
+    private val _diagnostics = MutableStateFlow<EpochDiagnostics?>(null)
+    val diagnostics: StateFlow<EpochDiagnostics?> = _diagnostics.asStateFlow()
+    @Volatile private var lastCellFix: ru.bkphenix.core.model.PositionObservation? = null
     /** Итог вертикальной проверки последней эпохи: высоты ГНСС, рельефа, барометра и расхождение. */
     val verticalCheck: StateFlow<VerticalCheck?> = _verticalCheck.asStateFlow()
     /** Итог привязки последней эпохи: исходная точка, точка на дороге, расстояние до дороги. */
@@ -167,6 +198,9 @@ class PhenixRepository(
     private val _sensors = MutableStateFlow<Map<SensorKind, SensorSnapshot>>(emptyMap())
     /** Счисление пути по ИИБ: источник компаратора и позиция карты при пропадании ГНСС. */
     private val deadReckoning = DeadReckoningSource()
+    private val altitudeVeto = GrossAltitudeVeto()
+    private val motionMonitor = MotionConsistencyMonitor()
+    private var motionVeto = false
 
     /** Режим счисления (пешком/авто); задаётся с карты. */
     var motionMode: MotionMode
@@ -175,6 +209,9 @@ class PhenixRepository(
 
     /** Текущая оценка счисления пути или null. */
     fun deadReckoningEstimate(): InertialEstimate? = deadReckoning.estimate(realtime())
+
+    /** Курс верха телефона по компасу (истинный), градусы; null — магнитометра нет. */
+    fun compassHeadingDeg(): Double? = deadReckoning.compassHeadingDeg()
 
     val sensorReadings: StateFlow<Map<SensorKind, SensorSnapshot>> = _sensors.asStateFlow()
     private val _networkTime = MutableStateFlow<NetworkTimeSample?>(null)
@@ -217,6 +254,7 @@ class PhenixRepository(
         if (job?.isActive == true) return
         job = scope.launch {
             (cellTowers as? AssetCellTowerDatabase)?.let { launch { it.load() } }
+            launch { loadLearnedCells() }
             roads?.let { launch { it.load() } }
             terrain?.let { launch { it.load() } }
             _capabilities.value = gnss.capabilities()
@@ -257,7 +295,7 @@ class PhenixRepository(
             }
             collectSafely(cells.cells()) { list ->
                 _cells.value = list
-                cellLocator.locate(list.map(CellMapping::toMeasurement), clock())?.let(aggregator::put)
+                cellLocator.locate(list.map(CellMapping::toMeasurement), clock()).also { lastCellFix = it }?.let(aggregator::put)
             }
             collectSafely(wifi.scans()) { _wifi.value = it }
             collectSafely(ble.beacons()) { _ble.value = it }
@@ -281,6 +319,7 @@ class PhenixRepository(
 
     @Synchronized
     fun stop() {
+        scope.launch { saveLearnedCells(force = true) }
         job?.cancel()
         job = null
         _running.value = false
@@ -297,6 +336,26 @@ class PhenixRepository(
     fun clearAnchor() {
         scope.launch {
             core.anchorManager.clear()
+            solveEpoch()
+        }
+    }
+
+    /** «Да» на предложение поставить якорь на остановке: точка становится ручным (доверенным) якорем. */
+    fun confirmAnchorSuggestion() {
+        scope.launch {
+            val now = clock()
+            val p = _solution.value?.anchor?.suggestion
+            if (core.anchorManager.confirmSuggestion(now)) {
+                p?.let { verticalMonitor()?.calibrateAtAnchor(it, now) }
+                solveEpoch()
+            }
+        }
+    }
+
+    /** «Позже»: предложения якоря не показываются 10 минут. */
+    fun dismissAnchorSuggestion() {
+        scope.launch {
+            core.anchorManager.dismissSuggestion(clock())
             solveEpoch()
         }
     }
@@ -330,13 +389,18 @@ class PhenixRepository(
             ?: VerticalIntegrityMonitor(model, barometer).also { vertical = model to it }
     }
 
-    /** Высота ГНСС — только свежий фикс провайдера gps (эллипсоидальная высота Location). */
+    /**
+     * Высота ГНСС — только свежий фикс провайдера gps (эллипсоидальная высота Location). Рельеф берётся
+     * под самим фиксом: проверяется согласованность фикса, а не итога — иначе после запрета GNSS по
+     * высоте (итог без GNSS) проверять стало бы нечего и запрет снимался бы сам.
+     */
     private fun checkVertical(solution: PhenixSolution, now: Long): VerticalCheck? {
         val monitor = verticalMonitor() ?: return null
         val gps = lastGps?.takeIf { abs(now - it.timeMillis) < GPS_FRESH_MILLIS }
         val trusted = solution.integrity.state == IntegrityState.OK
+        val point = gps?.let { GeoPoint(it.latitude, it.longitude) } ?: solution.point
         return monitor.update(
-            solution.point, gps?.altitude, gps?.verticalAccuracyM?.toDouble(), motionMode, trusted, now,
+            point, gps?.altitude, gps?.verticalAccuracyM?.toDouble(), motionMode, trusted, now,
         )
     }
 
@@ -359,22 +423,49 @@ class PhenixRepository(
             timeObservations = time,
             rawGnss = raw,
             navigationSubframes = subframes,
+            gnssVetoed = altitudeVeto.active || motionVeto,
         )
         val match = matchRoad(solved)
         _roadMatch.value = match
-        val offRoadReport = offRoad.update(match)
         val check = checkVertical(solved, now)
         _verticalCheck.value = check
-        val extra = listOfNotNull(offRoadReport, check?.report).filter { it.state != IntegrityState.OK }
+        // Грубая ошибка высоты (подмена у Шереметьево: +780 м) — запрет GNSS со следующей эпохи;
+        // счисление, привязанное к подменённой GNSS, сбрасывается.
+        if (altitudeVeto.update(check?.residualM)) deadReckoning.resetIfUnconfirmed()
+        // Движение ГНСС против датчиков (шаги, покой, поворот): подменённая точка у Шереметьево едет ~100 км/ч,
+        // а человек идёт пешком. Сверяется фикс чипа, а не итог — запрет со следующей эпохи.
+        val motion = deadReckoning.motionSummary(rt)
+        // В машине вибрация похожа на шаги: правило «шаги против скорости» только пешком и без режима (0.8.1;
+        // DOOGEE 12.11 — 336 ложных запретов ГНСС в «Авто»).
+        motionMonitor.stepsRule = motionMode != MotionMode.CAR
+        val motionCheck = motionMonitor.update(fresh.firstOrNull { it.source == PositionSource.GNSS }, motion, now)
+        val offRoadReport = offRoad.update(match, motionCheck.gnssSpeedMps)
+        if (motionCheck.veto && !motionVeto) deadReckoning.resetIfUnconfirmed()
+        motionVeto = motionCheck.veto
+        val extra = listOfNotNull(offRoadReport, check?.report, altitudeVeto.report(), motionCheck.report).filter { it.state != IntegrityState.OK }
         val solution = if (extra.isEmpty()) solved
         else solved.copy(integrity = IntegrityReport.merge(listOf(solved.integrity) + extra))
         _solution.value = solution
-        // Счисление считается независимым, только если привязано к решению, которое подтверждено
-        // без GNSS-повторителей и без самого счисления (или якорем).
-        val confirmed = solution.comparison.strongConfirmationsExcluding(SourceGroup.INERTIAL) >= ComparisonResult.QUORUM ||
-            solution.comparison.accepted.any { it.source == PositionSource.LANDMARK }
-        deadReckoning.onSolution(solution.point, solution.accuracyM, solution.integrity.state, rt, confirmed)
+        // Независимость привязки и запрет подпитки собственным итогом — в DeadReckoningSource.onSolution.
+        deadReckoning.onSolution(solution, rt)
         solution.point?.let { updateDeclination(it, now) }
+        learnCells(solution, now)
+        val diag = EpochDiagnostics(
+            timeMillis = now,
+            motionMode = motionMode,
+            altitudeVeto = altitudeVeto.active,
+            motionVeto = motionVeto,
+            motionReasons = motionCheck.report.reasons,
+            motion = motion,
+            gnssSpeedMps = motionCheck.gnssSpeedMps,
+            deadReckoning = deadReckoning.estimate(rt),
+            deadReckoningIndependent = deadReckoning.isAnchorIndependent,
+            compassHeadingDeg = deadReckoning.compassHeadingDeg(),
+            observations = fresh,
+            cellFix = lastCellFix,
+            learnedCells = learnedCells.matureCount,
+        )
+        _diagnostics.value = diag
         if (logRecorder.isRecording) {
             logRecorder.json(
                 "epoch",
@@ -388,8 +479,75 @@ class PhenixRepository(
                     sensors = _sensors.value.values,
                     networkTime = networkTimeSample,
                     observations = fresh,
+                    motion = motion,
+                    gnssSpeedMps = motionCheck.gnssSpeedMps,
+                    context = PhenixLogRecords.context(diag, check, match, _wifi.value, _ble.value, lastGps),
                 ),
             )
+        }
+    }
+
+    /**
+     * Обучение своей базы вышек — только по фиксу чипа при целостности «OK», без запрета ГНСС по высоте и движению,
+     * с точностью не хуже 30 м и в пределах 30 м от итога: подменённая ГНСС не должна отравить базу, а итог,
+     * собранный из самих вышек, — учить их по себе.
+     */
+    private fun learnCells(solution: PhenixSolution, now: Long) {
+        if (solution.integrity.state != IntegrityState.OK || altitudeVeto.active || motionVeto) return
+        val gps = lastGps?.takeIf { abs(now - it.timeMillis) < GPS_FRESH_MILLIS && !it.isMock } ?: return
+        val acc = gps.accuracy68M?.toDouble() ?: return
+        val point = GeoPoint(gps.latitude, gps.longitude)
+        val out = solution.point ?: return
+        if (out.distanceTo(point) > LearnedCellDatabase.MAX_ACCURACY_M) return
+        val cellsNow = _cells.value.map(CellMapping::toMeasurement)
+        if (learnedCells.learn(cellsNow, point, acc, now) > 0) {
+            learnedDirty = true
+            _learnedCellCount.value = learnedCells.matureCount
+        }
+        if (now - learnedSavedAt > LEARNED_SAVE_MILLIS) saveLearnedCells(force = false)
+    }
+
+    private suspend fun loadLearnedCells() {
+        val file = learnedCellsFile ?: return
+        val bytes = withContext(Dispatchers.IO) { runCatching { file.takeIf { it.exists() }?.readBytes() }.getOrNull() } ?: return
+        runCatching { learnedCells.merge(bytes.inputStream()) }.onFailure { Log.w(TAG, "Своя база вышек не прочитана", it) }
+        _learnedCellCount.value = learnedCells.matureCount
+        learnedSavedAt = clock()
+    }
+
+    /** Снимок пишется в потоке ядра, на диск — в IO через временный файл (обрыв записи не портит базу). */
+    private fun saveLearnedCells(force: Boolean) {
+        val file = learnedCellsFile ?: return
+        // Сохраняем, только если есть что: и по таймеру, и при остановке (force — не ждать таймера).
+        if (!learnedDirty || (!force && clock() - learnedSavedAt < LEARNED_SAVE_MILLIS)) return
+        learnedDirty = false
+        learnedSavedAt = clock()
+        val bytes = java.io.ByteArrayOutputStream().also { learnedCells.write(it) }.toByteArray()
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                file.parentFile?.mkdirs()
+                val tmp = java.io.File(file.path + ".tmp")
+                tmp.writeBytes(bytes)
+                if (!tmp.renameTo(file)) { file.delete(); tmp.renameTo(file) }
+            }.onFailure { Log.w(TAG, "Своя база вышек не сохранена", it) }
+        }
+    }
+
+    /** Экспорт своей базы вышек (формат BKLC 1) — перенести на другой телефон или сохранить. */
+    suspend fun exportLearnedCells(out: java.io.OutputStream) {
+        val bytes = withContext(coreDispatcher) { java.io.ByteArrayOutputStream().also { learnedCells.write(it) }.toByteArray() }
+        withContext(Dispatchers.IO) { out.write(bytes); out.flush() }
+    }
+
+    /** Импорт: соты складываются со своими, а не затирают их. Возвращает число прочитанных записей. */
+    suspend fun importLearnedCells(input: java.io.InputStream): Int {
+        val bytes = withContext(Dispatchers.IO) { input.readBytes() }
+        return withContext(coreDispatcher) {
+            learnedCells.merge(bytes.inputStream()).also {
+                learnedDirty = true
+                _learnedCellCount.value = learnedCells.matureCount
+                saveLearnedCells(force = true)
+            }
         }
     }
 
@@ -425,5 +583,6 @@ class PhenixRepository(
         const val RINEX_RETRY_MILLIS = 10 * 60_000L
         const val GNSS_TIME_UNCERTAINTY_MS = 1_000L
         const val DECLINATION_REFRESH_M = 10_000.0
+        const val LEARNED_SAVE_MILLIS = 5 * 60_000L
     }
 }

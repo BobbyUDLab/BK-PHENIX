@@ -65,6 +65,11 @@ public data class AnchorEvaluation(
     val lastHumanAnchor: Anchor? = null,
     /** Сколько раз якорь продлён автоматически с последнего ручного. */
     val autoRenewals: Int = 0,
+    /**
+     * Предложение поставить (подтвердить) якорь здесь: остановка с точной позицией без подозрения на подмену,
+     * а текущий якорь автоматический или устарел. Подтверждённое человеком — ручной якорь (доверенный).
+     */
+    val suggestion: GeoPoint? = null,
 )
 
 /**
@@ -83,13 +88,14 @@ public class AnchorManager(
     private var maxSpeedMps: Double = WALK_MAX_SPEED_MPS,
 ) {
     /**
-     * Режим движения. В «Авто» якорь продлевается сам (автоякорь) на остановках и при доверенных позициях;
-     * первый якорь всегда ставит человек. В «Пешком» — только ручной якорь и строгие правила.
+     * Режим движения. Во всех режимах якорь продлевается сам (автоякорь) на остановках и при доверенных
+     * позициях; первый якорь всегда ставит человек. Режим задаёт предельную скорость, с которой растёт σ якоря:
+     * пешком 3 м/с, в «Авто» и «Без привязки» — 50 м/с (без привязки может быть и машина).
      */
     public var motionMode: MotionMode = MotionMode.WALK
         set(value) {
             field = value
-            maxSpeedMps = if (value == MotionMode.CAR) CAR_MAX_SPEED_MPS else WALK_MAX_SPEED_MPS
+            maxSpeedMps = if (value == MotionMode.WALK) WALK_MAX_SPEED_MPS else CAR_MAX_SPEED_MPS
         }
     public var lastHumanAnchor: Anchor? = null
         private set
@@ -105,6 +111,13 @@ public class AnchorManager(
     private var last: AnchorEvaluation? = null
     private var conflictStreak = 0
     private var conflictWithQuorum = false
+    private var suggestion: GeoPoint? = null
+    private var followedWithoutQuorumM = 0.0
+    private var suggestionSigma = 0.0
+    private var suggestionsMutedUntil = Long.MIN_VALUE
+
+    /** Якорь доверенный: поставлен или подтверждён человеком (решение владельца, 08.11.2026). */
+    public val isTrusted: Boolean get() = anchor?.isAuto == false
 
     public fun setAnchor(anchor: Anchor) {
         if (!anchor.isAuto) { lastHumanAnchor = anchor; autoRenewals = 0 } else autoRenewals++
@@ -113,8 +126,23 @@ public class AnchorManager(
         point = anchor.point
         unknownMotionM = 0.0
         traveledM = 0.0
+        followedWithoutQuorumM = 0.0
         lastMillis = anchor.timestampMillis
         last = null
+        suggestion = null
+    }
+
+    /** Человек подтвердил предложенную точку: она становится ручным (доверенным) якорем. */
+    public fun confirmSuggestion(nowMillis: Long): Boolean {
+        val p = suggestion ?: return false
+        setAnchor(Anchor(p, suggestionSigma.coerceAtLeast(MIN_CONFIRMED_ACCURACY_M), nowMillis, AnchorMode.MANUAL, "подтверждено на остановке"))
+        return true
+    }
+
+    /** «Позже»: предложения не показываются [SUGGESTION_MUTE_MS]. */
+    public fun dismissSuggestion(nowMillis: Long) {
+        suggestion = null
+        suggestionsMutedUntil = nowMillis + SUGGESTION_MUTE_MS
     }
 
     private fun sigma(a: Anchor, nowMillis: Long): Double {
@@ -139,7 +167,11 @@ public class AnchorManager(
     public fun observation(nowMillis: Long): PositionObservation? {
         val a = anchor ?: return null
         if (last?.freshness == AnchorFreshness.MUST_UPDATE && last?.state != AnchorState.ANCHOR_CONFLICT) return null
-        return PositionObservation(PositionSource.LANDMARK, point ?: a.point, sigma(a, nowMillis), nowMillis)
+        val s = sigma(a, nowMillis)
+        // Якорь с большой σ — лишь область «где-то здесь»: он ограничивает решение, но не голосует в кворум
+        // как независимое подтверждение (иначе ГНСС внутри круга в километры получала бы «Надёжно»).
+        // Автоякорь без подтверждения человеком — тоже не голос: его поставили сами источники.
+        return PositionObservation(PositionSource.LANDMARK, point ?: a.point, s, nowMillis, gnssDerived = s > STRONG_MAX_SIGMA_M || a.isAuto)
     }
 
     public fun clear() {
@@ -148,6 +180,7 @@ public class AnchorManager(
         last = null
         lastHumanAnchor = null
         autoRenewals = 0
+        suggestion = null
     }
 
     /** Стоим: за последние [STOP_WINDOW_MS] смещение решения меньше [STOP_RADIUS_M]. */
@@ -158,24 +191,34 @@ public class AnchorManager(
     }
 
     /**
-     * Автоякорь (только «Авто», только после ручного): на остановке при согласии источников или после
-     * [TRUSTED_EPOCHS] эпох подряд доверенных позиций (кворум, малая σ). При подозрении на подмену — никогда:
+     * Автоякорь (во всех режимах, только после ручного): на остановке или после [TRUSTED_EPOCHS] эпох подряд
+     * доверенных позиций — в обоих случаях только при кворуме независимых источников без якоря и малой σ. При подозрении на подмену — никогда:
      * автоякорь не может подтвердить сам себя.
      */
     private fun maybeAutoRenew(
         estimate: GeoPoint?, sigma: Double?, nowMillis: Long, quorum: Boolean, spoofSuspected: Boolean, agreeing: String?,
     ) {
-        if (motionMode != MotionMode.CAR || lastHumanAnchor == null) return
-        if (estimate == null || sigma == null || spoofSuspected) { trustedStreak = 0; return }
+        if (estimate == null || sigma == null || spoofSuspected) { trustedStreak = 0; suggestion = null; return }
         recent.addLast(nowMillis to estimate)
         while (recent.isNotEmpty() && nowMillis - recent.first().first > STOP_WINDOW_MS) recent.removeFirst()
         val good = sigma <= AUTO_MAX_SIGMA_M && last?.state != AnchorState.ANCHOR_CONFLICT
         trustedStreak = if (good && quorum) trustedStreak + 1 else 0
-        val a = anchor ?: return
+        val stopped = good && stationary(nowMillis)
+        // Предложение человеку: остановка, точная позиция, подмены нет, а якоря нет, он автоматический или не актуален.
+        val current = anchor
+        val wantsHuman = current == null || current.isAuto || last?.freshness != AnchorFreshness.ACTUAL
+        suggestion = if (stopped && wantsHuman && nowMillis > suggestionsMutedUntil) estimate else null
+        suggestionSigma = sigma
+        // Автоякорь — только после ручного: первый якорь всегда ставит (подтверждает) человек.
+        if (lastHumanAnchor == null) return
+        val a = current ?: return
         val age = nowMillis - a.timestampMillis
-        val stop = good && stationary(nowMillis)
+        // И на остановке — только при кворуме без якоря: иначе неподвижная ГНСС сама переставляла якорь (храповик увода).
+        val stop = stopped && quorum
         val due = age >= AUTO_MIN_INTERVAL_MS || last?.freshness != AnchorFreshness.ACTUAL
         if (!due) return
+        // Доверенный (ручной) якорь слабым автоякорем заменяется, только когда он устарел окончательно.
+        if (!a.isAuto && last?.freshness != AnchorFreshness.MUST_UPDATE) return
         val reason = when {
             stop -> "остановка"
             trustedStreak >= TRUSTED_EPOCHS -> "доверенные позиции"
@@ -197,8 +240,8 @@ public class AnchorManager(
         agreeingSources: String? = null,
     ): AnchorEvaluation {
         maybeAutoRenew(estimate, estimateAccuracyM, nowMillis, sourcesHaveQuorum, spoofSuspected, agreeingSources)
-        return evaluateInner(estimate, estimateAccuracyM, nowMillis, sourcesHaveQuorum)
-            .copy(lastHumanAnchor = lastHumanAnchor, autoRenewals = autoRenewals).also { last = it }
+        return evaluateInner(estimate, estimateAccuracyM, nowMillis, sourcesHaveQuorum, spoofSuspected)
+            .copy(lastHumanAnchor = lastHumanAnchor, autoRenewals = autoRenewals, suggestion = suggestion).also { last = it }
     }
 
     private fun evaluateInner(
@@ -206,6 +249,7 @@ public class AnchorManager(
         estimateAccuracyM: Double?,
         nowMillis: Long,
         sourcesHaveQuorum: Boolean,
+        spoofSuspected: Boolean = false,
     ): AnchorEvaluation {
         val a = anchor ?: return AnchorEvaluation(
             AnchorState.NO_ANCHOR, null, null, null,
@@ -226,11 +270,25 @@ public class AnchorManager(
         val conflict = deviation > allowed
         conflictStreak = if (conflict) conflictStreak + 1 else 0
         conflictWithQuorum = conflict && sourcesHaveQuorum
-        if (!conflict) {
-            // Перемещение подтверждено согласованными источниками: положение по якорю следует за ними.
+        // Доверенный якорь (решение владельца 08.11.2026) следует за точной оценкой и без кворума: человек подтвердил
+        // точку, а согласие с ней — второй голос. В 0.8 якорь стоял на месте без кворума, σ росла 50 м/с, и уже через
+        // секунды он «не подтверждал» ничего (поездки 08.11: якорь 25 мин и 34 км «нужно обновить»). При подозрении на
+        // подмену и при конфликте якорь не идёт; σ растёт на 3 % пути — плавный увод не утащит его далеко.
+        // Без кворума — не дальше [TRUSTED_FOLLOW_MAX_PATH_M] от подтверждённой точки: дальше якорь стоит, его σ растёт,
+        // и на остановке приложение предлагает подтвердить новую точку (увод одной ГНСС не утащит якорь дальше).
+        val trustedFollow = isTrusted && !spoofSuspected && estimateAccuracyM <= TRUSTED_FOLLOW_MAX_SIGMA_M &&
+            followedWithoutQuorumM + deviation <= TRUSTED_FOLLOW_MAX_PATH_M
+        if (!conflict && (sourcesHaveQuorum || trustedFollow)) {
+            // Перемещение подтверждено кворумом независимых источников или доверенным якорем: положение следует.
             traveledM += deviation
+            followedWithoutQuorumM = if (sourcesHaveQuorum) 0.0 else followedWithoutQuorumM + deviation
             point = estimate
             unknownMotionM = 0.0
+        } else if (!conflict) {
+            // Без кворума якорь за оценкой не идёт (аудит 07.11.2026): иначе он становился эхом ГНСС и
+            // голосовал как «человек» за саму ГНСС, а плавный увод тянул его за собой. Якорь остаётся на
+            // месте, его σ растёт с предельной скоростью режима — честная область, где может быть человек.
+            unknownMotionM += maxSpeedMps * ((nowMillis - lastMillis).coerceAtLeast(0) / 1000.0)
         } else {
             unknownMotionM += maxSpeedMps * ((nowMillis - lastMillis).coerceAtLeast(0) / 1000.0)
         }
@@ -282,5 +340,14 @@ public class AnchorManager(
         /** Автоякорь весит меньше ручного: σ решения ×2, не меньше 10 м. */
         public const val AUTO_SIGMA_FACTOR: Double = 2.0
         public const val AUTO_MIN_ACCURACY_M: Double = 10.0
+        /** σ якоря, до которой он засчитывается в кворум как независимое подтверждение «Человек», м. */
+        public const val STRONG_MAX_SIGMA_M: Double = 100.0
+        /** Доверенный якорь следует за оценкой без кворума, если её σ не больше, м. */
+        public const val TRUSTED_FOLLOW_MAX_SIGMA_M: Double = 30.0
+        /** Сколько доверенный якорь может пройти за оценкой без кворума, м. */
+        public const val TRUSTED_FOLLOW_MAX_PATH_M: Double = 300.0
+        /** Подтверждённая на остановке точка весит не меньше, м. */
+        public const val MIN_CONFIRMED_ACCURACY_M: Double = 5.0
+        public const val SUGGESTION_MUTE_MS: Long = 10 * 60_000L
     }
 }

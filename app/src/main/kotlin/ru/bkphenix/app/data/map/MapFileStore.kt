@@ -61,6 +61,14 @@ class MapFileStore(context: Context) {
         }
     }
 
+    /** Принимает скачанный с сервера и проверенный файл: перемещает его на место карты без копирования. */
+    suspend fun adopt(downloaded: File) = withContext(Dispatchers.IO) {
+        if (!isValid(downloaded)) throw IOException("это не файл PMTiles v3")
+        dir.mkdirs()
+        if (!downloaded.renameTo(file)) throw IOException("не удалось сохранить файл карты")
+        _state.value = MapFileState.Ready(file)
+    }
+
     companion object {
         private const val REPORT_STEP = 8L shl 20
 

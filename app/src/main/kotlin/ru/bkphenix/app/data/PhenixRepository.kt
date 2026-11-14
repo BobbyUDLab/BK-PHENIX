@@ -230,6 +230,9 @@ class PhenixRepository(
 
     fun stopLog() = logRecorder.stop()
 
+    /** Файлы последнего завершённого журнала (txt и JSONL). */
+    val lastLogFiles: List<java.io.File> get() = logRecorder.lastFinished
+
     fun flushLog() = logRecorder.flush()
 
     fun deleteLogs() = logRecorder.deleteFinished()

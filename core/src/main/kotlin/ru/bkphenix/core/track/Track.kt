@@ -106,3 +106,18 @@ public object GpxWriter {
 
     private fun escape(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 }
+
+/**
+ * Обезличивание трека перед выгрузкой: удаляет точки ближе [radiusM] к началу и к концу трека,
+ * чтобы по выгруженному файлу нельзя было определить места отправления и прибытия (например, дом).
+ */
+public object TrackPrivacy {
+    public const val DEFAULT_RADIUS_M: Double = 300.0
+
+    public fun trimEnds(points: List<TrackPoint>, radiusM: Double = DEFAULT_RADIUS_M): List<TrackPoint> {
+        if (points.isEmpty()) return points
+        val first = points.first().point
+        val last = points.last().point
+        return points.filter { it.point.distanceTo(first) > radiusM && it.point.distanceTo(last) > radiusM }
+    }
+}

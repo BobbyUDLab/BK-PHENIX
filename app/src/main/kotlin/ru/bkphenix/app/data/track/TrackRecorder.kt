@@ -16,6 +16,7 @@ import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.track.GpxWriter
 import ru.bkphenix.core.track.TrackPoint
 import ru.bkphenix.core.track.TrackPolicy
+import ru.bkphenix.core.track.TrackPrivacy
 import ru.bkphenix.core.track.TrackQuality
 import ru.bkphenix.core.track.TrackSmoother
 import ru.bkphenix.core.track.TrackThinner
@@ -75,12 +76,17 @@ class TrackRecorder(
         }
     }
 
-    fun stop() {
+    /** Останавливает запись; возвращает идентификатор завершённого трека или null. */
+    fun stop(onFinished: (suspend (Long) -> Unit)? = null): Long? {
         val id = _state.value.trackId
         job?.cancel()
         job = null
         _state.value = TrackRecordingState()
-        if (id != null) scope.launch { dao.finish(id, clock()) }
+        if (id != null) scope.launch {
+            dao.finish(id, clock())
+            onFinished?.invoke(id)
+        }
+        return id
     }
 
     fun delete(id: Long) {
@@ -104,6 +110,24 @@ class TrackRecorder(
             writeText(GpxWriter.write(track.name, points))
         }
     }
+
+    /**
+     * Пишет GPX трека в [file] для выгрузки на сервер; при [trimEnds] начало и конец трека
+     * обрезаются (TrackPrivacy). Возвращает false, если писать нечего.
+     */
+    suspend fun writeGpx(id: Long, file: File, trimEnds: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val track = dao.track(id) ?: return@withContext false
+        val all = dao.points(id).map { it.toTrackPoint() }
+        val points = if (trimEnds) TrackPrivacy.trimEnds(all) else all
+        if (points.isEmpty()) return@withContext false
+        file.parentFile?.mkdirs()
+        file.writeText(GpxWriter.write(track.name, points))
+        true
+    }
+
+    fun gpxFileName(startedAt: Long): String = "bk-phenix-${fileFormat.format(Date(startedAt))}.gpx"
+
+    suspend fun startedAt(id: Long): Long? = withContext(Dispatchers.IO) { dao.track(id)?.startedAt }
 
     private companion object {
         val nameFormat = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.ROOT)

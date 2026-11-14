@@ -21,6 +21,7 @@ import ru.bkphenix.app.data.track.TrackRecorder
 import ru.bkphenix.app.ui.theme.ThemePreferences
 import ru.bkphenix.app.data.roads.RoadGraphStore
 import ru.bkphenix.app.data.terrain.TerrainStore
+import ru.bkphenix.app.data.server.ServerSync
 import java.io.File
 
 /** Ручное внедрение зависимостей: один репозиторий на процесс. */
@@ -56,7 +57,13 @@ class AppContainer(context: Context) {
         TrackRecorder(TrackDatabase.create(app).tracks(), repository.solution, File(app.filesDir, "gpx"))
     }
 
-    val recording: RecordingController by lazy { RecordingController(trackRecorder, repository) }
+    val recording: RecordingController by lazy {
+        RecordingController(trackRecorder, repository) { trackId, logs -> serverSync.onRecordingFinished(trackId, logs) }
+    }
+
+    val serverSync: ServerSync by lazy {
+        ServerSync(app, repository, trackRecorder, mapFiles, roadGraphs, terrainFiles)
+    }
 
     val mapFiles: MapFileStore by lazy { MapFileStore(app) }
 

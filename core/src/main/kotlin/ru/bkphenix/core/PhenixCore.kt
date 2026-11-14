@@ -156,7 +156,7 @@ public class PhenixCore(
         val usesAnchorFallback = est == null && anchor.anchor != null
         return PhenixSolution(
             point = if (usesAnchorFallback) anchor.propagatedPoint ?: anchor.anchor?.point else est,
-            // Нижняя граница σ итога 2 м (R95 ≈ 5 м): «±3 м» в поле почти недостижимо (наблюдение владельца, 08.11),
+            // Нижняя граница σ итога 2 м (R95 ≈ 5 м): «±3 м» в поле почти недостижимо (полевые испытания 08–12.11.2026),
             // а слияние нескольких источников с оптимистичной σ чипа давало σ < 1 м.
             accuracyM = (if (usesAnchorFallback) anchor.propagatedSigmaM ?: anchor.anchor?.accuracyM else estAcc)
                 ?.coerceAtLeast(MIN_REPORTED_SIGMA_M),

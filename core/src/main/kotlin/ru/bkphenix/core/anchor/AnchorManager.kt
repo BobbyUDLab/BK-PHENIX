@@ -116,7 +116,7 @@ public class AnchorManager(
     private var suggestionSigma = 0.0
     private var suggestionsMutedUntil = Long.MIN_VALUE
 
-    /** Якорь доверенный: поставлен или подтверждён человеком (решение владельца, 08.11.2026). */
+    /** Якорь доверенный: поставлен или подтверждён человеком (требование к продукту, 0.8.1). */
     public val isTrusted: Boolean get() = anchor?.isAuto == false
 
     public fun setAnchor(anchor: Anchor) {
@@ -270,7 +270,7 @@ public class AnchorManager(
         val conflict = deviation > allowed
         conflictStreak = if (conflict) conflictStreak + 1 else 0
         conflictWithQuorum = conflict && sourcesHaveQuorum
-        // Доверенный якорь (решение владельца 08.11.2026) следует за точной оценкой и без кворума: человек подтвердил
+        // Доверенный якорь (требование к продукту, 0.8.1) следует за точной оценкой и без кворума: человек подтвердил
         // точку, а согласие с ней — второй голос. В 0.8 якорь стоял на месте без кворума, σ росла 50 м/с, и уже через
         // секунды он «не подтверждал» ничего (поездки 08.11: якорь 25 мин и 34 км «нужно обновить»). При подозрении на
         // подмену и при конфликте якорь не идёт; σ растёт на 3 % пути — плавный увод не утащит его далеко.

@@ -26,6 +26,12 @@ data class RawLogState(
 class RawLogRecorder(private val directory: File, private val header: () -> String) {
     private var txt: BufferedWriter? = null
     private var jsonl: BufferedWriter? = null
+    private var sessionFiles: List<File> = emptyList()
+
+    /** Файлы последней завершённой сессии (для выгрузки на сервер). */
+    @Volatile
+    var lastFinished: List<File> = emptyList()
+        private set
     private var bytes = 0L
     private var lastPublishedBytes = 0L
     private val _state = MutableStateFlow(RawLogState(files = existingFiles()))
@@ -41,8 +47,11 @@ class RawLogRecorder(private val directory: File, private val header: () -> Stri
         try {
             directory.mkdirs()
             val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(Date())
-            txt = File(directory, "gnss_log_$stamp.txt").bufferedWriter().also { it.write(header()) }
-            jsonl = File(directory, "phenix_$stamp.jsonl").bufferedWriter()
+            val txtFile = File(directory, "gnss_log_$stamp.txt")
+            val jsonlFile = File(directory, "phenix_$stamp.jsonl")
+            txt = txtFile.bufferedWriter().also { it.write(header()) }
+            jsonl = jsonlFile.bufferedWriter()
+            sessionFiles = listOf(txtFile, jsonlFile)
             bytes = 0
             isRecording = true
             publish(null)
@@ -57,6 +66,7 @@ class RawLogRecorder(private val directory: File, private val header: () -> Stri
         if (!isRecording) return
         isRecording = false
         closeAll()
+        lastFinished = sessionFiles
         publish(null)
     }
 

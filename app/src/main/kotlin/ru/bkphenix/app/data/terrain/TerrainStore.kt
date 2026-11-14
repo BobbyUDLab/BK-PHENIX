@@ -80,6 +80,19 @@ class TerrainStore(context: Context) {
         }
     }
 
+    /** Принимает скачанный с сервера и проверенный файл: проверяет формат, загружает и перемещает на место. */
+    suspend fun adopt(downloaded: File) = withContext(Dispatchers.IO) {
+        _state.value = TerrainState.Loading
+        val g = try { read(downloaded) } catch (e: Exception) {
+            _state.value = model?.let { g0 -> TerrainState.Ready(g0.rows, g0.cols) } ?: TerrainState.Missing
+            throw IOException("это не файл рельефа BKDM: ${e.message}")
+        }
+        dir.mkdirs()
+        if (!downloaded.renameTo(file)) throw IOException("не удалось сохранить файл")
+        model = g
+        _state.value = TerrainState.Ready(g.rows, g.cols)
+    }
+
     private fun read(f: File): TerrainModel = GZIPInputStream(f.inputStream().buffered(1 shl 16), 1 shl 16).use { TerrainModel.read(it.buffered(1 shl 16)) }
 
     companion object {

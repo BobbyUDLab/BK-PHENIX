@@ -81,6 +81,19 @@ class RoadGraphStore(context: Context) {
         }
     }
 
+    /** Принимает скачанный с сервера и проверенный файл: проверяет формат, загружает и перемещает на место. */
+    suspend fun adopt(downloaded: File) = withContext(Dispatchers.IO) {
+        _state.value = RoadGraphState.Loading
+        val g = try { read(downloaded) } catch (e: Exception) {
+            _state.value = graph?.let { g0 -> RoadGraphState.Ready(g0.nodeCount, g0.segmentCount) } ?: RoadGraphState.Missing
+            throw IOException("это не дорожный граф BKRG: ${e.message}")
+        }
+        dir.mkdirs()
+        if (!downloaded.renameTo(file)) throw IOException("не удалось сохранить файл")
+        graph = g
+        _state.value = RoadGraphState.Ready(g.nodeCount, g.segmentCount)
+    }
+
     private fun read(f: File): RoadGraph = GZIPInputStream(f.inputStream().buffered(1 shl 16), 1 shl 16).use { RoadGraph.read(it.buffered(1 shl 16)) }
 
     companion object {

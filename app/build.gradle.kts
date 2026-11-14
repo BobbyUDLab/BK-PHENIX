@@ -14,16 +14,35 @@ android {
         applicationId = "ru.bkphenix"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "0.8.1"
+        versionCode = 16
+        versionName = "0.8.2"
+        // Отпечаток SHA-256 постоянного release-сертификата: обновление по воздуху принимается только с этой подписью.
+        buildConfigField("String", "RELEASE_CERT_SHA256", "\"F7F1B3D79DB8E049F41BDA893A0E8767E5F1E1EC0F37EF937060FD04B0B73463\"")
         // Нативный движок MapLibre: только ARM-телефоны, без x86, чтобы не раздувать APK.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
+    // Release-ключ хранится только у владельца, вне репозитория. Путь и пароль передаются через
+    // переменные окружения при сборке (скрипт сборки спрашивает пароль); без них release не подписывается.
+    val releaseKeystore = System.getenv("BKPHENIX_KEYSTORE")?.let { file(it) }?.takeIf { it.isFile }
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = releaseKeystore
+                storeType = "PKCS12"
+                storePassword = System.getenv("BKPHENIX_KS_PASS")
+                keyAlias = System.getenv("BKPHENIX_KEY_ALIAS") ?: "bkphenix"
+                keyPassword = System.getenv("BKPHENIX_KS_PASS")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = true
+            // Без минификации: release-сборка до этого не выпускалась, R8 пока не проверялся с MapLibre и Room.
+            isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 

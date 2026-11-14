@@ -38,6 +38,7 @@ import ru.bkphenix.app.ui.components.fmt
 import ru.bkphenix.app.ui.components.label
 import ru.bkphenix.app.ui.components.yesNo
 import ru.bkphenix.app.ui.theme.ThemeCard
+import ru.bkphenix.app.ui.server.ServerCard
 import java.io.File
 import java.util.Locale
 
@@ -68,6 +69,7 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel) {
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item { ServerCard() }
         item { ThemeCard() }
         item {
             SectionCard("О приложении") {

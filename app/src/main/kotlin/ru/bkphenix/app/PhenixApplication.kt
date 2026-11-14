@@ -9,5 +9,7 @@ class PhenixApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        // Незавершённая очередь выгрузки продолжится, когда появится подходящая сеть.
+        container.serverSync.scheduleUpload()
     }
 }

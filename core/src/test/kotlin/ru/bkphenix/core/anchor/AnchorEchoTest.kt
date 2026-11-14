@@ -28,7 +28,7 @@ class AnchorEchoTest {
             val t = t0 + i * 1000L
             last = core.solve(listOf(gnss(home.offset(1.5 * i, 90.0), t)), t) // увод 1,5 м/с на восток
         }
-        // 0.8.1 (решение владельца): доверенный якорь идёт за точной ГНСС и без кворума, но не дальше 300 м —
+        // 0.8.1 (требование к продукту): доверенный якорь идёт за точной ГНСС и без кворума, но не дальше 300 м —
         // увод на 900 м не утащил его за собой.
         assertTrue(last.anchor.propagatedPoint!!.distanceTo(home) <= AnchorManager.TRUSTED_FOLLOW_MAX_PATH_M + 1.0, "якорь ушёл на ${last.anchor.propagatedPoint!!.distanceTo(home)} м")
         assertNotEquals(PointTrustLevel.RELIABLE, PointTrust.of(last).level, "одна ГНСС + якорь-область не дают «Надёжно»")

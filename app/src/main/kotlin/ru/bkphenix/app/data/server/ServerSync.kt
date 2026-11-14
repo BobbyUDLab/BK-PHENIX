@@ -8,6 +8,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.util.Log
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -101,7 +102,6 @@ class ServerSync(
 ) {
     private val app = context.applicationContext
     private val settings = ServerSettings(app)
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val dir = File(app.filesDir, "server")
     private val outbox = File(dir, "outbox")
     private val downloads = File(dir, "dl")
@@ -113,6 +113,13 @@ class ServerSync(
 
     private val _state = MutableStateFlow(initialState())
     val state: StateFlow<ServerState> = _state.asStateFlow()
+
+    // Любая непредвиденная ошибка работы с сервером не должна ронять приложение: пишется в журнал и на экран.
+    private val crashGuard = CoroutineExceptionHandler { _, e ->
+        Log.e(TAG, "Ошибка работы с сервером", e)
+        _state.update { it.copy(login = if (it.login is LoginPhase.Waiting) LoginPhase.Failed(e.toString()) else it.login, uploading = false, uploadMessage = "Ошибка: $e") }
+    }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + crashGuard)
 
     private fun initialState(): ServerState {
         val cred = settings.credentials
@@ -164,7 +171,7 @@ class ServerSync(
                 checkUpdate()
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.w(TAG, "Вход на сервер не выполнен", e)
                 _state.update { it.copy(login = LoginPhase.Failed(e.message ?: "ошибка входа")) }
             }

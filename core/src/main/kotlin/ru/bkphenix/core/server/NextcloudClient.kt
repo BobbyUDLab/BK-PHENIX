@@ -112,7 +112,7 @@ public class NextcloudClient(
         val c = connect(davUrl(path), "GET")
         val code = c.responseCode
         if (code != 200) { c.disconnect(); throw ServerException(code, "чтение $path: HTTP $code") }
-        val bytes = c.inputStream.use { it.readNBytes(maxBytes + 1) }
+        val bytes = c.inputStream.use { readUpTo(it, maxBytes + 1) }
         c.disconnect()
         if (bytes.size > maxBytes) throw IOException("файл $path больше $maxBytes байт")
         return String(bytes, Charsets.UTF_8)
@@ -175,7 +175,7 @@ public class NextcloudClient(
     private fun readOk(c: HttpURLConnection): String {
         val code = c.responseCode
         if (code !in 200..299) { c.disconnect(); throw ServerException(code, "HTTP $code") }
-        val text = c.inputStream.use { String(it.readNBytes(1 shl 20), Charsets.UTF_8) }
+        val text = c.inputStream.use { String(readUpTo(it, 1 shl 20), Charsets.UTF_8) }
         c.disconnect()
         return text
     }
@@ -183,6 +183,21 @@ public class NextcloudClient(
     private fun seg(s: String): String = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 
     public companion object {
+        /**
+         * Чтение не более [limit] байт. `InputStream.readNBytes` появился в Android только в API 33,
+         * поэтому на телефонах с Android 8–12 его вызов роняет приложение (NoSuchMethodError).
+         */
+        internal fun readUpTo(input: java.io.InputStream, limit: Int): ByteArray {
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(8192)
+            while (out.size() < limit) {
+                val n = input.read(buf, 0, minOf(buf.size, limit - out.size()))
+                if (n < 0) break
+                out.write(buf, 0, n)
+            }
+            return out.toByteArray()
+        }
+
         private const val CONNECT_TIMEOUT_MS = 15_000
         private const val READ_TIMEOUT_MS = 60_000
         private const val PROGRESS_STEP = 1L shl 20

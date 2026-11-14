@@ -87,7 +87,7 @@ class CellLocatorTest {
 
     @Test
     fun `вышка второй SIM в 38 км не утягивает позицию`() {
-        // 19.05.2026: LTE МегаФона рядом, WCDMA Tele2 из кэша второй SIM — в 38 км.
+        // Полевая запись: сота основной SIM-карты рядом, устаревшая сота второй SIM-карты — в 38 км.
         val far = GeoPoint(TRUE_POINT.latitude + 0.34, TRUE_POINT.longitude)
         val db = dbOf(listOf(tower(1, TRUE_POINT, 1_000.0), tower(2, far, 3_560.0)))
         val obs = CellLocator(db).locate(listOf(cell(1, -75, serving = true), cell(2, -85, serving = true)), T0)!!

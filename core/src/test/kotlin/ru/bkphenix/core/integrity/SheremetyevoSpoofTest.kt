@@ -13,7 +13,8 @@ import ru.bkphenix.core.model.PositionSource
  * и в 13:10:40 и 13:12:11 МСК итог «прыгал» в аэропорт.
  */
 class SheremetyevoSpoofTest {
-    private val svo = GeoPoint(55.972, 37.415)
+    // Фикстура обезличена сдвигом на постоянный вектор; точка подмены сдвинута так же.
+    private val svo = GeoPoint(55.972 - 0.0412, 37.415 + 0.1137)
 
     @Test
     fun `поддельная точка у аэропорта не попадает в итог`() {

@@ -14,7 +14,7 @@ import ru.bkphenix.core.track.MotionMode
 
 /** Аудит 07.11.2026, риск №2: якорь не должен становиться эхом ГНСС. */
 class AnchorEchoTest {
-    private val home = GeoPoint(55.80, 37.50)
+    private val home = GeoPoint(55.7512, 37.6184)
     private val t0 = 1_000_000L
 
     private fun gnss(p: GeoPoint, t: Long) = PositionObservation(PositionSource.GNSS, p, 4.0, t)
@@ -28,7 +28,7 @@ class AnchorEchoTest {
             val t = t0 + i * 1000L
             last = core.solve(listOf(gnss(home.offset(1.5 * i, 90.0), t)), t) // увод 1,5 м/с на восток
         }
-        // 0.8.1 (решение владельца): доверенный якорь идёт за точной ГНСС и без кворума, но не дальше 300 м —
+        // 0.8.1 (требование к продукту): доверенный якорь идёт за точной ГНСС и без кворума, но не дальше 300 м —
         // увод на 900 м не утащил его за собой.
         assertTrue(last.anchor.propagatedPoint!!.distanceTo(home) <= AnchorManager.TRUSTED_FOLLOW_MAX_PATH_M + 1.0, "якорь ушёл на ${last.anchor.propagatedPoint!!.distanceTo(home)} м")
         assertNotEquals(PointTrustLevel.RELIABLE, PointTrust.of(last).level, "одна ГНСС + якорь-область не дают «Надёжно»")

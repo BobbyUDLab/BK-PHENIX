@@ -14,7 +14,7 @@ import ru.bkphenix.core.model.PositionSource
  * отсеивал все источники: позиция замирала на якоре, трек не шёл, повторно якорь не запрашивался.
  */
 class AnchorCarDriveTest {
-    private val start = GeoPoint(55.7958, 37.4955)
+    private val start = GeoPoint(55.7512, 37.6184)
     private val t0 = 1_793_786_912_000L
     private val speed = 15.0
 

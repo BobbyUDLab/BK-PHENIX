@@ -14,7 +14,7 @@ class LearnedCellDatabaseTest {
     private fun cell(id: Long, serving: Boolean = true) = CellMeasurement(CellTechnology.LTE, 250, 2, 9742, id, null, -80, null, serving)
     private fun north(m: Double) = GeoPoint(TRUE_POINT.latitude + m / 111_320.0, TRUE_POINT.longitude)
 
-    /** Офлайн-база, где станция стоит в 16 км (как eNB 100867 в полевых записях). */
+    /** Офлайн-база, где станция стоит в 16 км (как на полевых записях). */
     private val wrong = CellTowerDatabase { m ->
         CellTowerRecord(m.technology, 250, 2, 9742, m.cellId!!, north(16_000.0), 3_755.0)
     }

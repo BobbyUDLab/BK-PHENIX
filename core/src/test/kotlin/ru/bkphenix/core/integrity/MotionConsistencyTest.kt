@@ -33,7 +33,7 @@ class MotionConsistencyTest {
     }
 
     @Test
-    fun `прогулка с собакой, а ГНСС едет 100 км_ч по кругу — тревога и запрет ГНСС`() {
+    fun `пешая прогулка, а ГНСС едет 100 км_ч по кругу — тревога и запрет ГНСС`() {
         val r = run(60, ::spoofCircle) { walking }
         val firstAlarm = r.indexOfFirst { it.report.state == IntegrityState.SPOOFING_SUSPECTED }
         assertTrue(firstAlarm in 5..15, "первая тревога на $firstAlarm")

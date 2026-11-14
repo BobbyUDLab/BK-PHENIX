@@ -1,12 +1,18 @@
 package ru.bkphenix.app.ui.server
 
+import android.annotation.SuppressLint
+import android.webkit.CookieManager
+import android.webkit.WebResourceRequest
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -16,11 +22,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,6 +36,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ru.bkphenix.app.BuildConfig
 import ru.bkphenix.app.PhenixApplication
@@ -55,7 +64,7 @@ fun ServerCard() {
 
     SectionCard("Сервер") {
         if (!state.connected) {
-            LoginBlock(state, sync, context)
+            LoginBlock(state, sync)
         } else {
             InfoRow("Сервер", state.server.removePrefix("https://"))
             InfoRow("Пользователь", state.loginName)
@@ -88,16 +97,13 @@ fun ServerCard() {
 }
 
 @Composable
-private fun LoginBlock(state: ServerState, sync: ServerSync, context: Context) {
+private fun LoginBlock(state: ServerState, sync: ServerSync) {
     var url by rememberSaveable { mutableStateOf(state.server) }
     when (val phase = state.login) {
         is LoginPhase.Waiting -> {
-            LaunchedEffect(phase.loginUrl) { openUrl(context, phase.loginUrl) }
-            Text("Подтвердите вход в открывшемся браузере под пользователем для телефонов (bkphenix). Пароль приложения сервер выдаст этому телефону сам.")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { openUrl(context, phase.loginUrl) }) { Text("Открыть ещё раз") }
-                TextButton(onClick = sync::cancelLogin) { Text("Отмена") }
-            }
+            Text("Идёт вход на сервер. Войдите под пользователем для телефонов (bkphenix) и подтвердите доступ — пароль приложения сервер выдаст этому телефону сам.")
+            TextButton(onClick = sync::cancelLogin) { Text("Отмена") }
+            LoginWebDialog(phase.loginUrl, onCancel = sync::cancelLogin)
         }
         else -> {
             EmptyHint("Журналы и треки выгружаются на сервер владельца, оттуда же загружаются карта, ресурсы и обновления. Без сервера приложение работает полностью офлайн.")
@@ -194,6 +200,44 @@ private fun UpdateBlock(state: ServerState, sync: ServerSync, context: Context) 
     state.updateHint?.let { EmptyHint(it) }
 }
 
+/**
+ * Вход открывается во встроенном окне, а не во внешнем браузере: у окна свои куки, поэтому
+ * не подхватывается основной аккаунт владельца из браузера, страница входа открывается ровно один
+ * раз (повторное открытие во внешнем браузере давало «Токен состояния не совпадает»), а переходы
+ * за пределы сервера запрещены.
+ */
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun LoginWebDialog(loginUrl: String, onCancel: () -> Unit) {
+    val host = remember(loginUrl) { Uri.parse(loginUrl).host }
+    Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize()) {
+            Column {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Вход на сервер", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                    TextButton(onClick = onCancel) { Text("Отмена") }
+                }
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { ctx ->
+                        CookieManager.getInstance().removeAllCookies(null)
+                        WebView(ctx).apply {
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
+                                    request.url.scheme != "https" || request.url.host != host
+                            }
+                            loadUrl(loginUrl)
+                        }
+                    },
+                    onRelease = { it.destroy() },
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun SetupDialog(state: ServerState, onDone: (UploadContent, Boolean, Boolean) -> Unit, onDismiss: () -> Unit) {
     var content by remember { mutableStateOf(state.content) }
@@ -232,8 +276,6 @@ private fun Choice(label: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-private fun openUrl(context: Context, url: String) {
-    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
 }
 
 private fun size(bytes: Long): String = when {

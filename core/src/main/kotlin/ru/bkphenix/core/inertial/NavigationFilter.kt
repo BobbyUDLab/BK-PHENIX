@@ -93,6 +93,11 @@ public class NavigationFilter(
         rejected = 0
         scalarUpdate(doubleArrayOf(1.0, 0.0, 0.0, 0.0), e, r)
         scalarUpdate(doubleArrayOf(0.0, 1.0, 0.0, 0.0), n, r)
+        // Ошибки соседних фиксов ГНСС коррелированы (многолучёвость, атмосфера), а фильтр считает их
+        // независимыми: при фиксе раз в секунду σ «сходилась» к 0–1 м, и затем χ²-гейт отклонял верные
+        // фиксы в 10 м (прогулка 14.11.2026 18:06 — позиция «замерзла» на 5 мин). Нижний предел — доля σ фикса.
+        val floor = POSITION_FLOOR_FRACTION * POSITION_FLOOR_FRACTION * r / 2
+        for (axis in 0..1) if (p[axis][axis] < floor) p[axis][axis] = floor
         return true
     }
 
@@ -165,6 +170,8 @@ public class NavigationFilter(
 
     private companion object {
         const val GATE_CHI2_2DOF = 13.8
+        /** Нижний предел σ позиции после фикса — доля σ самого фикса. */
+        const val POSITION_FLOOR_FRACTION = 0.7
         const val MAX_REJECTED = 3
     }
 }

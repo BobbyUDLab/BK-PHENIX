@@ -4,6 +4,7 @@ import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.model.PositionObservation
 import ru.bkphenix.core.model.SourceGroup
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.sqrt
 
 /** Результат сверки источников. */
@@ -103,7 +104,10 @@ public class PositionComparator(
     }
 
     public fun areConsistent(a: PositionObservation, b: PositionObservation): Boolean {
-        val gate = gateSigma * sqrt(a.accuracyM * a.accuracyM + b.accuracyM * b.accuracyM)
+        // Нижний предел: два источника с заявленной σ 1–3 м расходятся на 5–10 м из-за многолучёвости и
+        // задержки; без предела точное счисление объявляло верную ГНСС несогласованной (журналы 14–15.11.2026:
+        // 397 эпох ложной тревоги при расхождении < 20 м). Подмена расходится на сотни метров и километры.
+        val gate = max(MIN_GATE_M, gateSigma * sqrt(a.accuracyM * a.accuracyM + b.accuracyM * b.accuracyM))
         return a.point.distanceTo(b.point) <= gate
     }
 
@@ -142,6 +146,9 @@ public class PositionComparator(
 
     public companion object {
         public const val DEFAULT_GATE_SIGMA: Double = 3.0
+
+        /** Минимальный допуск согласия двух источников, м. */
+        public const val MIN_GATE_M: Double = 10.0
 
         /** Перебор подмножеств ограничен; лишние (наименее точные) наблюдения отбрасываются. */
         public const val MAX_OBSERVATIONS: Int = 12

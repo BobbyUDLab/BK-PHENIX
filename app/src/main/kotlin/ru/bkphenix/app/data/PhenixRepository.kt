@@ -200,6 +200,7 @@ class PhenixRepository(
     private val deadReckoning = DeadReckoningSource()
     private val altitudeVeto = GrossAltitudeVeto()
     private val motionMonitor = MotionConsistencyMonitor()
+    private val pedestrianSmoother = ru.bkphenix.core.track.PedestrianSmoother()
     private var motionVeto = false
 
     /** Режим счисления (пешком/авто); задаётся с карты. */
@@ -441,13 +442,21 @@ class PhenixRepository(
         // В машине вибрация похожа на шаги: правило «шаги против скорости» только пешком и без режима (0.8.1;
         // DOOGEE 12.11 — 336 ложных запретов ГНСС в «Авто»).
         motionMonitor.stepsRule = motionMode != MotionMode.CAR
-        val motionCheck = motionMonitor.update(fresh.firstOrNull { it.source == PositionSource.GNSS }, motion, now)
+        // Движение ГНСС подтверждено сотами или сетью — правила «шаги/покой» не применяются (вагон МЦК, 15.11.2026).
+        val corroborated = solved.comparison.accepted.any { it.source == PositionSource.GNSS } &&
+            solved.comparison.accepted.any { (it.source == PositionSource.CELL || it.source == PositionSource.NETWORK) && !it.gnssDerived }
+        val motionCheck = motionMonitor.update(fresh.firstOrNull { it.source == PositionSource.GNSS }, motion, now, corroborated)
         val offRoadReport = offRoad.update(match, motionCheck.gnssSpeedMps)
         if (motionCheck.veto && !motionVeto) deadReckoning.resetIfUnconfirmed()
         motionVeto = motionCheck.veto
         val extra = listOfNotNull(offRoadReport, check?.report, altitudeVeto.report(), motionCheck.report).filter { it.state != IntegrityState.OK }
-        val solution = if (extra.isEmpty()) solved
+        val merged = if (extra.isEmpty()) solved
         else solved.copy(integrity = IntegrityReport.merge(listOf(solved.integrity) + extra))
+        // Пешком на грубых источниках точка не скачет быстрее пешехода (0.8.3).
+        val solution = merged.point?.let { p ->
+            val out = pedestrianSmoother.apply(p, merged.accuracyM ?: DEFAULT_SMOOTH_SIGMA_M, now, motionMode)
+            if (out.limited) merged.copy(point = out.point, accuracyM = out.accuracyM) else merged
+        } ?: merged
         _solution.value = solution
         // Независимость привязки и запрет подпитки собственным итогом — в DeadReckoningSource.onSolution.
         deadReckoning.onSolution(solution, rt)
@@ -573,6 +582,7 @@ class PhenixRepository(
     }
 
     private companion object {
+        const val DEFAULT_SMOOTH_SIGMA_M = 50.0
         const val TAG = "BkPhenix"
         const val EPOCH_MILLIS = 1_000L
         const val STATUS_STALE_MILLIS = 5_000L

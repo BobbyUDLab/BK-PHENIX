@@ -103,9 +103,11 @@ public class PhenixCore(
         }
         integrity = IntegrityReport.merge(listOf(integrity, continuityResult.report))
         val spoof = integrity.state == IntegrityState.SPOOFING_SUSPECTED
+        val calm = integrity.state !in ALARM_STATES
         val anchor = anchorManager.evaluate(
             unanchored.estimate, unanchored.accuracyM, nowMillis, unanchored.hasQuorum, spoof,
             unanchored.accepted.map { it.source.displayName }.distinct().joinToString(", "),
+            integrityCalm = calm,
         )
         if (anchor.state == AnchorState.ANCHOR_CONFLICT) {
             integrity = IntegrityReport.merge(
@@ -168,6 +170,12 @@ public class PhenixCore(
     }
 
     private companion object {
+        /** Состояния целостности, при которых доверенный якорь не идёт за оценкой. */
+        val ALARM_STATES = setOf(
+            IntegrityState.SPOOFING_SUSPECTED, IntegrityState.INCONSISTENT, IntegrityState.GNSS_LOST,
+            IntegrityState.NAV_DATA_CORRUPTED, IntegrityState.NO_DATA,
+        )
+
         /** Нижняя граница σ собственного решения: модель ошибок псевдодальностей оптимистична. */
         const val MIN_WLS_SIGMA_M = 3.0
         const val MIN_REPORTED_SIGMA_M = 2.0

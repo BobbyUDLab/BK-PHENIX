@@ -114,8 +114,17 @@ object PhenixLogRecords {
             point(it.point) + mapOf(
                 "sigmaM" to it.sigmaM, "speedMps" to it.speedMps, "bearingDeg" to it.bearingDeg,
                 "sinceFixMs" to it.sinceFixMillis, "stationary" to it.stationary, "independent" to d.deadReckoningIndependent,
+                "unobservedS" to it.unobservedS,
             )
         },
+        // Датчики движения (0.8.3): по ним настраивается распознавание шагов и режима.
+        "motion" to d.motion?.let {
+            mapOf(
+                "steps10s" to it.steps, "cadenceHz" to it.cadenceHz, "stepCv" to it.stepIntervalCv,
+                "stillS" to it.stationaryS, "yawDeg" to it.yawChangeDeg, "walking" to it.walking,
+            )
+        },
+        "gnssSpeedMps" to d.gnssSpeedMps,
         "cellFix" to d.cellFix?.let { point(it.point) + mapOf("sigmaM" to it.accuracyM, "t" to it.timestampMillis) },
         "learnedCells" to d.learnedCells,
         "gpsFix" to gps?.let {

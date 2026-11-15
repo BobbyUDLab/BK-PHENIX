@@ -21,6 +21,8 @@ public data class InertialEstimate(
     /** Сколько прошло с последнего принятого решения ГНСС, мс. */
     val sinceFixMillis: Long,
     val stationary: Boolean,
+    /** Сколько секунд с последнего фикса движение было не наблюдаемо (пешком: нет ни шагов, ни покоя). */
+    val unobservedS: Double = 0.0,
 )
 
 /**
@@ -59,6 +61,8 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
     private var magSeen = false
     private var headingAligned = false
     private var stillSamples = 0
+    private var unobservedS = 0.0
+    private var stillS = 0.0
 
     /** Шаги, покой и поворот для сверки с ГНСС — во всех режимах, без привязки к счислению. */
     public val sensing: MotionSensing = MotionSensing()
@@ -101,6 +105,14 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
         val ms = s.timeNanos / NANOS_PER_MILLI
         filter.predict(ms)
         distanceSinceFix += filter.speedMps * dt
+        // Без фикса σ обязана расти и тогда, когда скорость фильтра нулевая: телефон может двигаться
+        // незамеченным (шаги не распознаны, вагон МЦК, рука). Покой (ZUPT) — медленный рост, «ни шагов,
+        // ни покоя» пешком — рост со скоростью неспешной ходьбы.
+        if (stationary) {
+            stillS += dt
+        } else if (mode == MotionMode.WALK && lastStepNanos.let { it == null || s.timeNanos - it > NO_STEP_NANOS }) {
+            unobservedS += dt
+        }
         if (stationary) {
             filter.zeroVelocity()
             return
@@ -131,6 +143,8 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
         if (ok) {
             lastFixMillis = timeMillis
             distanceSinceFix = 0.0
+            unobservedS = 0.0
+            stillS = 0.0
         }
         return ok
     }
@@ -177,13 +191,15 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
         // Плюс ошибка курса: σ смещения курса и дрейф гироскопа без магнитометра.
         val headingSigma = if (mode == MotionMode.WALK) Math.toRadians(headingOffsetSigmaDeg) else 0.0
         val drift = kotlin.math.hypot(DRIFT_PER_METER * distanceSinceFix, distanceSinceFix * kotlin.math.sin(headingSigma.coerceAtMost(Math.PI / 2)))
-        val sigma = kotlin.math.sqrt(filter.sigmaM * filter.sigmaM + drift * drift)
+        val unobserved = UNOBSERVED_SPEED_MPS * unobservedS + STILL_DRIFT_MPS * stillS
+        val sigma = kotlin.math.sqrt(filter.sigmaM * filter.sigmaM + drift * drift + unobserved * unobserved)
+            .coerceAtLeast(MIN_SIGMA_M)
         if (sigma > maxSigma(mode)) return null
         val point = filter.point ?: return null
         val moving = filter.speedMps > MIN_MOVING_MPS
         return InertialEstimate(
             point, sigma, filter.speedMps, if (moving) filter.bearingDeg else null,
-            nowMillis - (lastFixMillis ?: nowMillis), stationary,
+            nowMillis - (lastFixMillis ?: nowMillis), stationary, unobservedS,
         )
     }
 
@@ -194,6 +210,7 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
         headingOffsetDeg = 0.0; headingOffsetSigmaDeg = INITIAL_HEADING_SIGMA_DEG
         alignAnchor = null; stepSin = 0.0; stepCos = 0.0; stepCount = 0
         magSeen = false; headingAligned = false
+        unobservedS = 0.0; stillS = 0.0
         filter = NavigationFilter(accelNoise(mode))
     }
 
@@ -214,6 +231,15 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
         const val MIN_CAR_SPEED = 2.0
         const val MIN_MOVING_MPS = 0.5
         const val CONSTRAINT_PERIOD_NANOS = 100_000_000L
+
+        /** Пешком без шагов дольше этого движение считается ненаблюдаемым. */
+        const val NO_STEP_NANOS = 2_000_000_000L
+        /** Рост σ при ненаблюдаемом движении пешком, м/с (неспешная ходьба). */
+        const val UNOBSERVED_SPEED_MPS = 0.7
+        /** Рост σ в покое (ZUPT), м/с: покой определяется с ошибками, телефон могут переложить. */
+        const val STILL_DRIFT_MPS = 0.02
+        /** Нижний предел σ счисления, м. */
+        const val MIN_SIGMA_M = 2.0
 
         /** Дрейф счисления: 8 % пройденного без ГНСС пути (1σ). */
         const val DRIFT_PER_METER = 0.08

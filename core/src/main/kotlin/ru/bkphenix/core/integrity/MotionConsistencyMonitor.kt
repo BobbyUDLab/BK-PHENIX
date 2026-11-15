@@ -47,7 +47,13 @@ public class MotionConsistencyMonitor(
     /** Правило «шаги против скорости ГНСС». В машине выключается: вибрация кузова похожа на шаги. */
     public var stepsRule: Boolean = true
 
-    public fun update(gnss: PositionObservation?, motion: MotionSummary?, nowMillis: Long): MotionCheck {
+    /**
+     * @param corroborated движение ГНСС подтверждено независимым от неё источником (соты, сеть согласуются с ГНСС).
+     *   Тогда «шаги» и «покой» не считаются противоречием: вибрация вагона похожа на шаги, плавный вагон — на покой
+     *   (поездка на МЦК 15.11.2026 в режиме «Пешком»: ГНСС запрещена, трек перестал писаться). Подмена у Шереметьево
+     *   расходится с сотами на километры — там подтверждения нет, и правила работают как раньше.
+     */
+    public fun update(gnss: PositionObservation?, motion: MotionSummary?, nowMillis: Long, corroborated: Boolean = false): MotionCheck {
         gnss?.let { g ->
             if (history.isEmpty() || g.timestampMillis > history.last().first) history.addLast(g.timestampMillis to g.point)
         }
@@ -56,6 +62,7 @@ public class MotionConsistencyMonitor(
         if (motion == null || speed == null) return result(null, null, speed)
 
         val reason = when {
+            corroborated -> null
             stepsRule && motion.walking && speed > maxWalkSpeedMps ->
                 "ГНСС движется ${kmh(speed)} км/ч, а датчики видят шаги (${motion.steps} за 10 с) — возможна подмена ГНСС"
             motion.stationaryS >= minStillS && speed > maxStillSpeedMps ->

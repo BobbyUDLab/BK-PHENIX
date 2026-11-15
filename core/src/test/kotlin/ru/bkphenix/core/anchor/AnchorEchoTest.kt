@@ -77,16 +77,33 @@ class AnchorEchoTest {
     }
 
     @Test
-    fun `доверенный якорь идёт за точной ГНСС без кворума и подтверждает её`() {
+    fun `доверенный якорь идёт за точной ГНСС без кворума и подтверждает её вблизи подтверждённой точки`() {
         val core = PhenixCore().apply { anchorManager.motionMode = MotionMode.WALK }
         core.anchorManager.setAnchor(Anchor(home, 5.0, t0))
         var last = core.solve(listOf(gnss(home, t0)), t0)
+        var near = last
         for (i in 1..120) {
             val t = t0 + i * 1000L
             last = core.solve(listOf(gnss(home.offset(1.2 * i, 0.0), t)), t) // прогулка 1,2 м/с, 144 м
+            if (i == 35) near = last // 42 м от подтверждённой точки
         }
         assertTrue(last.anchor.propagatedPoint!!.distanceTo(home.offset(144.0, 0.0)) < 15.0, "якорь отстал")
-        assertEquals(2, last.comparison.strongConfirmations, "ГНСС + человек")
+        assertEquals(2, near.comparison.strongConfirmations, "ГНСС + человек в пределах 50 м от подтверждения")
+        // Дальше точка якоря — уже то, куда привела ГНСС: независимым голосом она не считается (решение 15.11.2026).
+        assertEquals(1, last.comparison.strongConfirmations, "якорь, ушедший за ГНСС на 144 м, не голосует")
+    }
+
+    @Test
+    fun `доверенный якорь не идёт за ГНСС сразу после тревоги`() {
+        val core = PhenixCore().apply { anchorManager.motionMode = MotionMode.WALK }
+        core.anchorManager.setAnchor(Anchor(home, 5.0, t0))
+        core.solve(listOf(gnss(home, t0)), t0)
+        // Минуту ГНСС нет (глушение): тревога, якорь стоит, его σ растёт.
+        for (i in 1..60) core.solve(emptyList(), t0 + i * 1000L)
+        // Первый фикс после восстановления приёма смещён на 100 м при σ 3 м (прогулка 14.11.2026, 18:09).
+        val t = t0 + 61_000L
+        val r = core.solve(listOf(gnss(home.offset(100.0, 45.0), t)), t)
+        assertTrue(r.anchor.propagatedPoint!!.distanceTo(home) < 1.0, "якорь не должен уйти за первым фиксом после тревоги")
     }
 
     @Test

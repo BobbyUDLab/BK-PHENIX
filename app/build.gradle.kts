@@ -14,8 +14,8 @@ android {
         applicationId = "ru.bkphenix"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.8.2"
+        versionCode = 17
+        versionName = "0.8.3"
         // Отпечаток SHA-256 постоянного release-сертификата: обновление по воздуху принимается только с этой подписью.
         buildConfigField("String", "RELEASE_CERT_SHA256", "\"F7F1B3D79DB8E049F41BDA893A0E8767E5F1E1EC0F37EF937060FD04B0B73463\"")
         // Нативный движок MapLibre: только ARM-телефоны, без x86, чтобы не раздувать APK.

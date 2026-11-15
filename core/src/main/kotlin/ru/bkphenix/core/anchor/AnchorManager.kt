@@ -113,6 +113,7 @@ public class AnchorManager(
     private var conflictWithQuorum = false
     private var suggestion: GeoPoint? = null
     private var followedWithoutQuorumM = 0.0
+    private var calmStreak = 0
     private var suggestionSigma = 0.0
     private var suggestionsMutedUntil = Long.MIN_VALUE
 
@@ -171,7 +172,11 @@ public class AnchorManager(
         // Якорь с большой σ — лишь область «где-то здесь»: он ограничивает решение, но не голосует в кворум
         // как независимое подтверждение (иначе ГНСС внутри круга в километры получала бы «Надёжно»).
         // Автоякорь без подтверждения человеком — тоже не голос: его поставили сами источники.
-        return PositionObservation(PositionSource.LANDMARK, point ?: a.point, s, nowMillis, gnssDerived = s > STRONG_MAX_SIGMA_M || a.isAuto)
+        // Доверенный якорь, ушедший за оценкой без кворума дальше [TRUSTED_VOTE_MAX_PATH_M], стоит уже не там, где
+        // подтвердил человек, а там, куда его привела ГНСС: такой якорь не голосует как независимый (решение
+        // владельца 15.11.2026 после прогулки 14.11, когда якорь ушёл за ошибочным фиксом и «перевесил» верную ГНСС).
+        val drifted = followedWithoutQuorumM > TRUSTED_VOTE_MAX_PATH_M
+        return PositionObservation(PositionSource.LANDMARK, point ?: a.point, s, nowMillis, gnssDerived = s > STRONG_MAX_SIGMA_M || a.isAuto || drifted)
     }
 
     public fun clear() {
@@ -238,7 +243,9 @@ public class AnchorManager(
         sourcesHaveQuorum: Boolean = false,
         spoofSuspected: Boolean = false,
         agreeingSources: String? = null,
+        integrityCalm: Boolean = !spoofSuspected,
     ): AnchorEvaluation {
+        calmStreak = if (integrityCalm) calmStreak + 1 else 0
         maybeAutoRenew(estimate, estimateAccuracyM, nowMillis, sourcesHaveQuorum, spoofSuspected, agreeingSources)
         return evaluateInner(estimate, estimateAccuracyM, nowMillis, sourcesHaveQuorum, spoofSuspected)
             .copy(lastHumanAnchor = lastHumanAnchor, autoRenewals = autoRenewals, suggestion = suggestion).also { last = it }
@@ -276,7 +283,10 @@ public class AnchorManager(
         // подмену и при конфликте якорь не идёт; σ растёт на 3 % пути — плавный увод не утащит его далеко.
         // Без кворума — не дальше [TRUSTED_FOLLOW_MAX_PATH_M] от подтверждённой точки: дальше якорь стоит, его σ растёт,
         // и на остановке приложение предлагает подтвердить новую точку (увод одной ГНСС не утащит якорь дальше).
-        val trustedFollow = isTrusted && !spoofSuspected && estimateAccuracyM <= TRUSTED_FOLLOW_MAX_SIGMA_M &&
+        // С 0.8.3 — только после [TRUSTED_FOLLOW_CALM_EPOCHS] эпох без тревог: первые фиксы после восстановления приёма
+        // бывают смещены на сотни метров при заявленной σ 3 м (прогулка 14.11.2026, 18:09).
+        val trustedFollow = isTrusted && !spoofSuspected && calmStreak >= TRUSTED_FOLLOW_CALM_EPOCHS &&
+            estimateAccuracyM <= TRUSTED_FOLLOW_MAX_SIGMA_M &&
             followedWithoutQuorumM + deviation <= TRUSTED_FOLLOW_MAX_PATH_M
         if (!conflict && (sourcesHaveQuorum || trustedFollow)) {
             // Перемещение подтверждено кворумом независимых источников или доверенным якорем: положение следует.
@@ -344,6 +354,12 @@ public class AnchorManager(
         public const val STRONG_MAX_SIGMA_M: Double = 100.0
         /** Доверенный якорь следует за оценкой без кворума, если её σ не больше, м. */
         public const val TRUSTED_FOLLOW_MAX_SIGMA_M: Double = 30.0
+
+        /** Сколько эпох подряд без тревог целостности нужно, чтобы доверенный якорь пошёл за оценкой без кворума. */
+        public const val TRUSTED_FOLLOW_CALM_EPOCHS: Int = 10
+
+        /** Дальше этого пути без кворума доверенный якорь перестаёт быть независимым голосом, м. */
+        public const val TRUSTED_VOTE_MAX_PATH_M: Double = 50.0
         /** Сколько доверенный якорь может пройти за оценкой без кворума, м. */
         public const val TRUSTED_FOLLOW_MAX_PATH_M: Double = 300.0
         /** Подтверждённая на остановке точка весит не меньше, м. */

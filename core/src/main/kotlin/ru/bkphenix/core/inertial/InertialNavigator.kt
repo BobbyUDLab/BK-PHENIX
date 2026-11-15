@@ -192,7 +192,13 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
         val headingSigma = if (mode == MotionMode.WALK) Math.toRadians(headingOffsetSigmaDeg) else 0.0
         val drift = kotlin.math.hypot(DRIFT_PER_METER * distanceSinceFix, distanceSinceFix * kotlin.math.sin(headingSigma.coerceAtMost(Math.PI / 2)))
         val unobserved = UNOBSERVED_SPEED_MPS * unobservedS + STILL_DRIFT_MPS * stillS
-        val sigma = kotlin.math.sqrt(filter.sigmaM * filter.sigmaM + drift * drift + unobserved * unobserved)
+        // Динамика: прогноз отстаёт от разгона и торможения, а метка времени фикса гуляет на ±0,5 с. Без этого
+        // счисление с σ 2 м «опровергало» верную ГНСС в 11–15 м на каждом разгоне в машине, и трек
+        // становился пунктирным (поездки 15.11.2026: 90 % эпох «ГНСС не согласуется» с счислением).
+        val sinceFixS = ((nowMillis - (lastFixMillis ?: nowMillis)) / 1000.0).coerceIn(0.0, DYNAMICS_HORIZON_S)
+        val accelSigma = if (mode == MotionMode.CAR) CAR_ACCEL_SIGMA_MPS2 else WALK_ACCEL_SIGMA_MPS2
+        val dynamics = kotlin.math.hypot(filter.speedMps * FIX_TIMING_SIGMA_S, 0.5 * accelSigma * sinceFixS * sinceFixS)
+        val sigma = kotlin.math.sqrt(filter.sigmaM * filter.sigmaM + drift * drift + unobserved * unobserved + dynamics * dynamics)
             .coerceAtLeast(MIN_SIGMA_M)
         if (sigma > maxSigma(mode)) return null
         val point = filter.point ?: return null
@@ -238,6 +244,14 @@ public class InertialNavigator(mode: MotionMode = MotionMode.WALK) {
         const val UNOBSERVED_SPEED_MPS = 0.7
         /** Рост σ в покое (ZUPT), м/с: покой определяется с ошибками, телефон могут переложить. */
         const val STILL_DRIFT_MPS = 0.02
+        /** Неопределённость метки времени фикса, с. */
+        const val FIX_TIMING_SIGMA_S = 0.5
+        /** Неучтённое ускорение (1σ), м/с²: в машине разгон и торможение, пешком — смена темпа. */
+        const val CAR_ACCEL_SIGMA_MPS2 = 3.0
+        const val WALK_ACCEL_SIGMA_MPS2 = 1.0
+        /** Горизонт вклада ускорения; дальше рост σ задаёт модель дрейфа. */
+        const val DYNAMICS_HORIZON_S = 3.0
+
         /** Нижний предел σ счисления, м. */
         const val MIN_SIGMA_M = 2.0
 

@@ -84,4 +84,22 @@ class Field1415Test {
         car.apply(home, 40.0, 0, MotionMode.CAR)
         assertFalse(car.apply(home.offset(160.0, 90.0), 40.0, 1000, MotionMode.CAR).limited)
     }
+
+    @Test
+    fun `в машине σ счисления учитывает разгон и метку времени фикса`() {
+        val nav = InertialNavigator(MotionMode.CAR)
+        var tNanos = 0L
+        // Едем 10 м/с на восток, фиксы раз в секунду; ИИБ — вибрация без покоя.
+        for (s in 0 until 20) {
+            for (k in 0 until 100) {
+                tNanos += dtNanos
+                val t = tNanos / 1e9
+                nav.onImu(ImuSample(tNanos, doubleArrayOf(0.4 * sin(t * 31), 0.3 * sin(t * 23), 9.81 + 0.4 * sin(t * 17)), doubleArrayOf(0.01 * sin(t * 5), 0.0, 0.0)))
+            }
+            nav.onFix(home.offset(10.0 * s, 90.0), 3.0, tNanos / 1_000_000)
+        }
+        val e = nav.estimate(tNanos / 1_000_000 + 1500)!!
+        // Поездки 15.11.2026: на разгонах ГНСС расходилась со счислением на 11–15 м при σ счисления 2 м.
+        assertTrue(e.sigmaM >= 5.0, "σ через 1,5 с после фикса на 10 м/с: ${e.sigmaM}")
+    }
 }

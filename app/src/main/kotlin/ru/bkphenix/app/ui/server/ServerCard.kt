@@ -276,8 +276,6 @@ private fun Choice(label: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-}
-
 private fun size(bytes: Long): String = when {
     bytes >= 1L shl 30 -> String.format(Locale.ROOT, "%.1f ГБ", bytes / (1L shl 30).toDouble())
     bytes >= 1L shl 20 -> String.format(Locale.ROOT, "%.0f МБ", bytes / (1L shl 20).toDouble())

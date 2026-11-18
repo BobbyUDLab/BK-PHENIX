@@ -79,4 +79,19 @@ class DeadReckoningSourceTest {
         val solution = PhenixCore().solve(listOf(gnss), 2_000)
         assertTrue(dr.onSolution(solution, 2_000))
     }
+
+    /** 16.11.2026: новая запись началась со счисления прошлой поездки в 20 км; полный сброс забывает и подтверждённое. */
+    @Test
+    fun `полный сброс забывает и подтверждённое счисление`() {
+        val dr = seeded()
+        assertTrue(dr.onSolution(p, 5.0, IntegrityState.OK, 1_500, independentlyConfirmed = true))
+        assertFalse(dr.resetIfUnconfirmed())
+        assertTrue(dr.observation(2_000, 2_000) != null)
+        dr.reset()
+        assertNull(dr.observation(3_000, 3_000))
+        assertFalse(dr.isAnchorIndependent)
+        // После сброса один фикс снова не основа: нужен новый посев.
+        assertTrue(dr.onSolution(p, 5.0, IntegrityState.SUSPICIOUS, 4_000))
+        assertNull(dr.observation(5_000, 5_000))
+    }
 }

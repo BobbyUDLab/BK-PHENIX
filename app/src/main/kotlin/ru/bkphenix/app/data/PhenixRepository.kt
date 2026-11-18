@@ -1,6 +1,7 @@
 package ru.bkphenix.app.data
 
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -52,6 +53,7 @@ import ru.bkphenix.app.ui.satellites.SatelliteSummary
 import ru.bkphenix.core.PhenixCore
 import ru.bkphenix.core.PhenixSolution
 import ru.bkphenix.core.anchor.Anchor
+import ru.bkphenix.core.anchor.AnchorFreshness
 import ru.bkphenix.core.anchor.AnchorMode
 import ru.bkphenix.core.geo.GeoPoint
 import ru.bkphenix.core.gnss.NavigationSubframe
@@ -172,6 +174,12 @@ class PhenixRepository(
     private var gnssTimeOffsetMs: Long? = null
     private var networkTimeSample: NetworkTimeSample? = null
     private var job: Job? = null
+    private var watchdog: Job? = null
+    private var resourceJob: Job? = null
+    @Volatile private var lastEpochRealtime = 0L
+
+    /** Сведения о питании (сон, экран, батарея) для записей о перерывах; задаёт контейнер приложения. */
+    var powerInfo: (() -> Map<String, Any?>)? = null
 
     private val _solution = MutableStateFlow<PhenixSolution?>(null)
     val solution: StateFlow<PhenixSolution?> = _solution.asStateFlow()
@@ -256,11 +264,16 @@ class PhenixRepository(
     @Synchronized
     fun start() {
         if (job?.isActive == true) return
-        job = scope.launch {
+        lastEpochRealtime = realtime()
+        // Базы и эфемериды — один раз на запуск сервиса: перезапуск источников (сторож, новая запись) их не трогает.
+        if (resourceJob?.isActive != true) resourceJob = scope.launch {
             (cellTowers as? AssetCellTowerDatabase)?.let { launch { it.load() } }
             launch { loadLearnedCells() }
             roads?.let { launch { it.load() } }
             terrain?.let { launch { it.load() } }
+            launch { refreshEphemerides() }
+        }
+        job = scope.launch {
             _capabilities.value = gnss.capabilities()
             collectSafely(location.locations()) { raw ->
                 LocationMapping.toObservation(raw)?.let(aggregator::put)
@@ -312,18 +325,139 @@ class PhenixRepository(
                 networkTimeSample = it
                 _networkTime.value = it
             }
-            launch { refreshEphemerides() }
+            lastEpochRealtime = realtime()
             while (true) {
-                solveEpoch()
+                val rt = realtime()
+                val gap = rt - lastEpochRealtime
+                if (gap > STALL_MILLIS) onStall(gap)
+                lastEpochRealtime = rt
+                guardedEpoch()
                 delay(EPOCH_MILLIS)
             }
         }
         _running.value = true
+        startWatchdog()
     }
+
+    /**
+     * Эпоха без права уронить цикл (0.8.3): исключение в одной эпохе пишется в журнал и логкат,
+     * а цикл и подписки на источники продолжают работать.
+     */
+    private fun guardedEpoch() {
+        try {
+            solveEpoch()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            epochErrors++
+            Log.e(TAG, "Ошибка в эпохе", e)
+            if (logRecorder.isRecording) {
+                logRecorder.json("error", clock(), mapOf("where" to "epoch", "error" to e.toString(), "stack" to e.stackTraceToString().take(STACK_LIMIT)))
+            }
+        }
+    }
+
+    /**
+     * Перерыв в обработке эпох (0.8.3). Поездка 18.11.2026 18:39: обработка встала на 24 минуты при живом процессе,
+     * GPS и датчики перестали приходить, трек не писался 9 км. После такого перерыва прошлое состояние (счисление,
+     * фильтр непрерывности, устаревшие наблюдения) — уже не свидетель, а подписки на источники перерегистрируются.
+     */
+    private fun onStall(gapMillis: Long) {
+        stalls++
+        Log.w(TAG, "Перерыв в обработке эпох: $gapMillis мс")
+        if (logRecorder.isRecording) logRecorder.json("stall", clock(), stallFields(gapMillis))
+        resyncState()
+        if (gapMillis > SOURCE_RESTART_GAP_MILLIS) scope.launch { restartSources() }
+    }
+
+    /** Состояние питания для разбора перерывов: сон, экран, исключение из оптимизации батареи. */
+    private fun stallFields(gapMillis: Long): Map<String, Any?> = buildMap {
+        put("gapMs", gapMillis)
+        powerInfo?.invoke()?.let { putAll(it) }
+    }
+
+    /** Сброс состояния, которое после перерыва или в новой записи врёт: счисление, непрерывность, сглаживание, наблюдения. */
+    private fun resyncState() {
+        deadReckoning.reset()
+        core.continuity.reset()
+        motionMonitor.reset()
+        pedestrianSmoother.reset()
+        altitudeVeto.reset()
+        offRoad.reset()
+        matcher?.second?.reset()
+        motionVeto = false
+        aggregator.clear()
+        pendingRaw = null
+        pendingSubframes.clear()
+        lastGps = null
+    }
+
+    /** Перезапуск подписок на все источники (GPS, датчики, соты): так же, как при перезапуске приложения. */
+    private fun restartSources() {
+        synchronized(this) {
+            job?.cancel()
+            job = null
+        }
+        start()
+    }
+
+    /**
+     * Сторож цикла (0.8.3): если эпохи не идут дольше [WATCHDOG_STALE_MILLIS] (цикл остановился, а процесс жив),
+     * источники перезапускаются. Работает вне задачи цикла, поэтому её гибель не останавливает и сторожа.
+     */
+    private fun startWatchdog() {
+        if (watchdog?.isActive == true) return
+        watchdog = scope.launch {
+            while (true) {
+                delay(WATCHDOG_TICK_MILLIS)
+                if (!_running.value) continue
+                val idle = realtime() - lastEpochRealtime
+                if (job?.isActive != true || idle > WATCHDOG_STALE_MILLIS) {
+                    Log.w(TAG, "Сторож: эпох нет $idle мс, перезапуск источников")
+                    watchdogRestarts++
+                    if (logRecorder.isRecording) logRecorder.json("watchdog", clock(), stallFields(idle))
+                    resyncState()
+                    restartSources()
+                }
+            }
+        }
+    }
+
+    /**
+     * Начало новой записи (0.8.3): «Запись» начинается с чистого листа, как после перезапуска приложения.
+     * 16.11.2026 запись началась с якоря и счисления прошлой поездки в 20 км: настоящая GNSS 25 с отвергалась.
+     * Якорь сохраняется, только если он актуален по свежей оценке (человек часто ставит его прямо перед записью).
+     */
+    fun beginSession() {
+        scope.launch {
+            val a = _solution.value?.anchor
+            // Оценка якоря должна быть свежей: если эпох давно не было (сервис стоял, телефон спал), «актуален» — устаревшее.
+            val keepAnchor = a?.anchor != null && a.freshness == AnchorFreshness.ACTUAL &&
+                realtime() - lastEpochRealtime <= SESSION_ANCHOR_FRESH_MILLIS
+            if (!keepAnchor) core.anchorManager.clear()
+            resyncState()
+            restartSources()
+            if (logRecorder.isRecording) {
+                logRecorder.json("session", clock(), mapOf("anchorKept" to keepAnchor) + (powerInfo?.invoke() ?: emptyMap()))
+            }
+        }
+    }
+
+    /** Счётчики для диагностики: ошибки эпох, перерывы, перезапуски сторожем. */
+    @Volatile var epochErrors: Int = 0
+        private set
+    @Volatile var stalls: Int = 0
+        private set
+    @Volatile var watchdogRestarts: Int = 0
+        private set
 
     @Synchronized
     fun stop() {
         scope.launch { saveLearnedCells(force = true) }
+        watchdog?.cancel()
+        watchdog = null
+        resourceJob?.cancel()
+        resourceJob = null
         job?.cancel()
         job = null
         _running.value = false
@@ -577,7 +711,16 @@ class PhenixRepository(
 
     private fun <T> CoroutineScope.collectSafely(flow: Flow<T>, action: suspend (T) -> Unit) {
         launch {
-            flow.catch { Log.w(TAG, "Источник остановлен с ошибкой", it) }.collect { action(it) }
+            flow.catch { Log.w(TAG, "Источник остановлен с ошибкой", it) }.collect {
+                // Ошибка обработки одного значения не роняет подписку и весь цикл (0.8.3).
+                try {
+                    action(it)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(TAG, "Ошибка обработки источника", e)
+                }
+            }
         }
     }
 
@@ -585,6 +728,15 @@ class PhenixRepository(
         const val DEFAULT_SMOOTH_SIGMA_M = 50.0
         const val TAG = "BkPhenix"
         const val EPOCH_MILLIS = 1_000L
+        /** Перерыв между эпохами, после которого состояние сбрасывается, мс. */
+        const val STALL_MILLIS = 15_000L
+        /** Перерыв, после которого и подписки на источники перерегистрируются, мс. */
+        const val SOURCE_RESTART_GAP_MILLIS = 30_000L
+        const val WATCHDOG_TICK_MILLIS = 5_000L
+        const val WATCHDOG_STALE_MILLIS = 20_000L
+        /** Оценка якоря старше этого при начале записи не доказывает его актуальность, мс. */
+        const val SESSION_ANCHOR_FRESH_MILLIS = 60_000L
+        const val STACK_LIMIT = 2_000
         const val STATUS_STALE_MILLIS = 5_000L
         const val GPS_FRESH_MILLIS = 3_000L
         /**

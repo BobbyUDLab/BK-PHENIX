@@ -21,6 +21,10 @@ class ObservationAggregator(
         }
     }
 
+    /** Забыть все наблюдения: после перерыва или в новой записи старые точки сети и сот не свидетели. */
+    @Synchronized
+    fun clear() = latest.clear()
+
     @Synchronized
     fun fresh(nowMillis: Long): List<PositionObservation> = latest.values.filter {
         nowMillis - it.timestampMillis <= (maxAgeMillis[it.source] ?: defaultMaxAgeMillis)

@@ -17,6 +17,8 @@ class RecordingController(
     val recording: Boolean get() = recorder.state.value.recording
 
     fun start() {
+        // Новая запись — с чистого листа (0.8.3): перезапуск источников и сброс состояния прошлой поездки.
+        repository.beginSession()
         recorder.start()
         if (!repository.logState.value.recording) repository.startLog()
     }

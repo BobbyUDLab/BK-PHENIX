@@ -121,6 +121,18 @@ public class DeadReckoningSource(private val navigator: InertialNavigator = Iner
         return true
     }
 
+    /**
+     * Полный сброс (0.8.3): начало новой записи или перерыв в обработке эпох (сон телефона, перезапуск
+     * источников). Позиция счисления из прошлой поездки — не свидетель: 16.11.2026 она стояла в 20 км от
+     * настоящей и вместе с устаревшими сетью и сотами отвергла честную GNSS как «скачок при старте».
+     */
+    @Synchronized
+    public fun reset() {
+        navigator.reset()
+        anchorIndependent = false
+        acceptedFixes = 0
+    }
+
     /** Сколько решений принято с момента создания: до [MIN_SEED_FIXES] счисление не голосует. */
     private var acceptedFixes = 0
 

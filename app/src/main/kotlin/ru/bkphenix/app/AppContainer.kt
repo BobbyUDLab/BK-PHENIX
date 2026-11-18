@@ -2,6 +2,7 @@ package ru.bkphenix.app
 
 import android.content.Context
 import android.os.Build
+import android.os.PowerManager
 import ru.bkphenix.app.data.PhenixRepository
 import ru.bkphenix.app.data.cells.AssetCellTowerDatabase
 import ru.bkphenix.app.data.map.MapFileStore
@@ -50,6 +51,17 @@ class AppContainer(context: Context) {
                     platform = Build.VERSION.RELEASE,
                 )
             },
+        ).also { it.powerInfo = ::powerInfo }
+    }
+
+    /** Состояние питания для записей журнала о перерывах в обработке (0.8.3). */
+    private fun powerInfo(): Map<String, Any?> {
+        val pm = app.getSystemService(PowerManager::class.java) ?: return emptyMap()
+        return mapOf(
+            "interactive" to pm.isInteractive,
+            "deviceIdle" to pm.isDeviceIdleMode,
+            "powerSave" to pm.isPowerSaveMode,
+            "ignoringBatteryOptimizations" to pm.isIgnoringBatteryOptimizations(app.packageName),
         )
     }
 

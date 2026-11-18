@@ -54,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
+import ru.bkphenix.app.service.BatteryOptimization
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -332,7 +333,11 @@ private fun MapContent(viewModel: MapViewModel, file: File, onReimport: () -> Un
                     held?.let { h -> map?.easeCamera(CameraUpdateFactory.newLatLng(LatLng(h.point.latitude, h.point.longitude)), EASE_MILLIS) }
                     Toast.makeText(context, R.string.map_anchor_hint, Toast.LENGTH_LONG).show()
                 }
-                RecordButton(recording.recording, recording.points, logState.bytes, viewModel::toggleTrack)
+                RecordButton(recording.recording, recording.points, logState.bytes) {
+                    // Перед записью — исключение из оптимизации батареи (0.8.3): иначе прошивка может усыпить обработку.
+                    if (!recording.recording) BatteryOptimization.requestIfNeeded(context)
+                    viewModel.toggleTrack()
+                }
             }
         }
     }

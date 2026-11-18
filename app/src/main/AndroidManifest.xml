@@ -15,6 +15,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Удержание процессора, пока пишется лог или трек при выключенном экране. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 0.8.3: запрос исключения из оптимизации батареи перед записью (сон обработки 18.11.2026). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <!-- Wi-Fi RTT используется для определения местоположения, поэтому без neverForLocation. -->
